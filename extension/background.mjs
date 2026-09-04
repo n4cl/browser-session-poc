@@ -21,8 +21,9 @@ function connectNativeHost() {
     }
   });
   port.onDisconnect.addListener(() => {
-    if (chrome.runtime.lastError) {
-      console.error("Native Messaging connection closed");
+    const errorMessage = chrome.runtime.lastError?.message;
+    if (errorMessage) {
+      console.error("Native Messaging connection closed:", errorMessage);
     }
     port = undefined;
   });

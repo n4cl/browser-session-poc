@@ -37,6 +37,8 @@ test("manifest public key derives the fixed unpacked extension ID", async () => 
   const background = await readFile(path.join(repositoryRoot, "extension", "background.mjs"), "utf8");
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(background, /chrome\.runtime\.connectNative/);
+  assert.match(background, /chrome\.runtime\.lastError\?\.message/);
+  assert.match(background, /console\.error\("Native Messaging connection closed:", errorMessage\)/);
 });
 
 test("Native Messaging codec handles partial and multiple frames", () => {
