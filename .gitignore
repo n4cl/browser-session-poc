@@ -1,0 +1,5 @@
+# Local OSS checkouts and research notes.
+/research/
+
+# PoC runtime state, sockets, logs, and disposable Chrome profiles.
+/.runtime/
