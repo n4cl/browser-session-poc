@@ -64,17 +64,9 @@ request_id
 
 外部npm dependencyはまだ追加しない。MCPを接続する段階で、公式MCP SDKを使用する案と最小JSON-RPC実装を比較し、ライセンス・保守性・API互換性を確認してから決める。
 
-### pairing案
+### pairing設計
 
-1. launcherがbrowser instanceと一回限りnonceを生成する。
-2. session専用Unix socketと、nonceからsocketを解決する短寿命descriptorを作る。
-3. 専用`--user-data-dir`でChromeを起動する。
-4. Extensionのpairing pageへnonceを渡す。
-5. ExtensionがNative Hostへnonceを送り、Hostが対応するsocketへ接続する。
-6. MCP側とExtension側の両方でidentity tupleを確定する。
-7. nonce/descriptorを失効させ、generation付きleaseへ切り替える。
-
-pairing pageへnonceを渡す方式がChrome上で安定しない場合は、この方式に固執せず、Extension popupでの一回限りpairing code入力を比較対象にする。
+Gate 2は、instance専用profile→manifest→wrapper→descriptor→session専用Unix socketの決定経路を採用する。pairing pageへnonceを渡す旧案は採用しない。state machine、nonce一回利用、resume、脅威モデル、acceptance testは[Gate 2 pairing設計](./gate-2-design.md)を参照する。
 
 ## 6. Gate方式の実装順序
 
