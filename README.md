@@ -47,3 +47,5 @@ Extensionの`storage` permissionは、`pair_active`で確定したbinding（sess
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 
 ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。明示的なrotation/resetは後続のsession harness実装で扱う。Gate 1の実機結果は過去の確認記録として保持している。
+
+`npm run pairing -- start <instance-id>` は前景session harnessを開始する。crashしたharnessのstale claim recoveryは未実装であり、次のlifecycle単位で設計する。
