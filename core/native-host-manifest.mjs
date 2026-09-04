@@ -28,6 +28,7 @@ export function resolveNativeHostPaths({ repositoryRoot, runtimeRoot, instanceId
     hostPath: path.join(root, "native-host", "host.mjs"),
     manifestPath: path.join(nativeHostsDir, `${GATE_1_NATIVE_HOST_NAME}.json`),
     nodeExecutable,
+    runtimeRoot: runtime,
     userDataDir: instancePaths.userDataDir,
     wrapperPath,
   };
@@ -47,8 +48,8 @@ export function nativeHostManifestContent({ wrapperPath }) {
   )}\n`;
 }
 
-export function nativeHostWrapperContent({ nodeExecutable, hostPath }) {
-  return `#!/bin/sh\nexec ${shellQuote(nodeExecutable)} ${shellQuote(hostPath)} "$@"\n`;
+export function nativeHostWrapperContent({ nodeExecutable, hostPath, runtimeRoot, browserInstanceId }) {
+  return `#!/bin/sh\nexec ${shellQuote(nodeExecutable)} ${shellQuote(hostPath)} --pairing-runtime-root ${shellQuote(runtimeRoot)} --pairing-instance-id ${shellQuote(browserInstanceId)} "$@"\n`;
 }
 
 async function readIfPresent(filePath) {

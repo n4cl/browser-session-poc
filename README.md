@@ -34,6 +34,14 @@ npm run native-host -- plan poc-gate1
 npm run native-host -- uninstall poc-gate1
 ```
 
-専用profileの`chrome://extensions`が開く。Developer modeを有効にし、**Load unpacked**でコマンド出力の`manual_extension_directory`を選択する。導入後にのみ、ExtensionがNative Hostへ接続する。通常の`start`は`about:blank`を開き、Extensionを自動導入しない。
+専用profileの`chrome://extensions`が開く。Developer modeを有効にし、**Load unpacked**でコマンド出力の`manual_extension_directory`を選択する。通常の`start`は`about:blank`を開き、Extensionを自動導入しない。
 
 詳細は[Gate 1実機試験結果](./docs/gate-1-results.md)を参照する。
+
+## Gate 2 Native Host wrapper
+
+`install`が生成するwrapperは、固定されたruntime rootとinstance-idをHostへ引数で渡す。Hostはそのinstanceのprofile metadataとactive descriptorだけを0600・非symlink・期限の条件で再検証し、descriptorが指定したsession socketだけへ接続する。他instanceの探索やGate 1への自動fallbackはしない。
+
+Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
+
+現時点のExtensionはまだGate 2 protocolを送らないため、このwrapperを導入した実機のend-to-end検証は次のExtension実装単位まで保留する。Gate 1の実機結果は過去の確認記録として保持している。

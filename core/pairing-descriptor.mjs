@@ -106,6 +106,15 @@ async function ensurePrivateDirectory(directory, runtimeRoot, label) {
   return resolvedDirectory;
 }
 
+async function requirePrivateDirectory(directory, runtimeRoot, label) {
+  const resolvedDirectory = assertPathWithin(runtimeRoot, directory, label);
+  const existing = await inspectExistingPath(resolvedDirectory, label);
+  if (!existing?.isDirectory() || modeOf(existing) !== 0o700) {
+    throw new Error(`${label} must be an existing directory with mode 0700`);
+  }
+  return resolvedDirectory;
+}
+
 async function readPrivateJson(filePath, mode, label) {
   const info = await inspectExistingPath(filePath, label);
   if (info === null) {
@@ -226,6 +235,21 @@ export async function loadOrCreateProfileMetadata(paths, { createUuid = randomUU
 
   const concurrent = await readPrivateJson(paths.profileMetadataPath, 0o600, "profile metadata");
   return validateProfileMetadata(concurrent, { browserInstanceId: paths.instanceId });
+}
+
+/**
+ * Reads, but never creates, the profile identity used to bind a Native Host to one browser instance.
+ */
+export async function readProfileMetadata(paths) {
+  await requirePrivateDirectory(paths.runtimeRoot, paths.runtimeRoot, "runtime directory");
+  await requirePrivateDirectory(path.join(paths.runtimeRoot, "profiles"), paths.runtimeRoot, "profiles directory");
+  await requirePrivateDirectory(paths.userDataDir, paths.runtimeRoot, "user data directory");
+  await requirePrivateDirectory(paths.profileMetadataDirectory, paths.runtimeRoot, "profile metadata directory");
+  const metadata = await readPrivateJson(paths.profileMetadataPath, 0o600, "profile metadata");
+  if (metadata === null) {
+    throw new Error("profile metadata is missing");
+  }
+  return validateProfileMetadata(metadata, { browserInstanceId: paths.instanceId });
 }
 
 export async function createSocketPath(paths, { createUuid = randomUUID } = {}) {
@@ -352,4 +376,23 @@ export async function writeActivePairingDescriptor(
     throw new Error("refusing to overwrite a different active pairing descriptor");
   }
   return { created: false, descriptor: concurrent };
+}
+
+/**
+ * Reads one already-issued descriptor without creating directories or following links. This is the
+ * Native Host entry point: it deliberately cannot discover another browser instance's descriptor.
+ */
+export async function readActivePairingDescriptor(
+  paths,
+  { profileInstanceId, now = new Date() } = {},
+) {
+  await requirePrivateDirectory(paths.runtimeRoot, paths.runtimeRoot, "runtime directory");
+  await requirePrivateDirectory(path.join(paths.runtimeRoot, "instances"), paths.runtimeRoot, "instances directory");
+  await requirePrivateDirectory(paths.instanceDir, paths.runtimeRoot, "instance directory");
+  await requirePrivateDirectory(paths.pairingDirectory, paths.runtimeRoot, "pairing directory");
+  const descriptor = await readPrivateJson(paths.activeDescriptorPath, 0o600, "active pairing descriptor");
+  if (descriptor === null) {
+    throw new Error("active pairing descriptor is missing");
+  }
+  return validatePairingDescriptor(descriptor, { paths, profileInstanceId, now });
 }

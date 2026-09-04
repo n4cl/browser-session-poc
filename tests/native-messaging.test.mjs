@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
@@ -18,7 +18,19 @@ import {
   MAX_HOST_TO_EXTENSION_BYTES,
   NativeMessageDecoder,
 } from "../native-host/codec.mjs";
-import { runNativeHost } from "../native-host/host.mjs";
+import {
+  parseNativeHostArguments,
+  runNativeHost,
+  runPairingNativeHost,
+} from "../native-host/host.mjs";
+import {
+  createPairingDescriptor,
+  createSocketPath,
+  loadOrCreateProfileMetadata,
+  resolvePairingPaths,
+  writeActivePairingDescriptor,
+} from "../core/pairing-descriptor.mjs";
+import { PairingSocketServer } from "../core/pairing-socket-server.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
@@ -26,6 +38,66 @@ function collect(stream) {
   const chunks = [];
   stream.on("data", (chunk) => chunks.push(chunk));
   return () => Buffer.concat(chunks);
+}
+
+const PAIRING_NOW = new Date("2030-01-01T00:30:00.000Z");
+
+function pairingIdentity(descriptor, hostConnectionId) {
+  return {
+    protocol_version: 1,
+    session_id: descriptor.session_id,
+    browser_instance_id: descriptor.browser_instance_id,
+    profile_instance_id: descriptor.profile_instance_id,
+    generation: descriptor.generation,
+    lease_id: descriptor.lease_id,
+    host_connection_id: hostConnectionId,
+  };
+}
+
+async function pairingFixture(instanceId = "poc-a") {
+  const { mkdtemp } = await import("node:fs/promises");
+  const root = await mkdtemp("/private/tmp/bsp-host-");
+  const runtimeRoot = path.join(root, "runtime");
+  const paths = resolvePairingPaths({ runtimeRoot, instanceId });
+  const metadata = await loadOrCreateProfileMetadata(paths, {
+    createUuid: () => "11111111-1111-4111-8111-111111111111",
+  });
+  const socketPath = await createSocketPath(paths, {
+    createUuid: () => "22222222-2222-4222-8222-222222222222",
+  });
+  const descriptor = createPairingDescriptor({
+    paths,
+    profileInstanceId: metadata.profile_instance_id,
+    sessionId: "session-a",
+    generation: 1,
+    socketPath,
+    issuedAt: "2030-01-01T00:00:00.000Z",
+    expiresAt: "2030-01-01T01:00:00.000Z",
+    leaseId: "lease-a",
+    pairingNonce: "nonce-a",
+  });
+  await writeActivePairingDescriptor(paths, descriptor, {
+    profileInstanceId: metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  return { root, runtimeRoot, paths, metadata, descriptor };
+}
+
+function bridgeFor(challenge) {
+  const sent = [];
+  let closed = false;
+  return {
+    sent,
+    async connector({ socketPath }) {
+      assert.equal(socketPath, challenge.socket_path);
+      return {
+        send(message) { sent.push(message); },
+        async receive() { return challenge.message; },
+        close() { closed = true; },
+      };
+    },
+    get closed() { return closed; },
+  };
 }
 
 test("manifest public key derives the fixed unpacked extension ID", async () => {
@@ -128,6 +200,269 @@ test("Native Host rejects an origin that is not an exact match", async () => {
   assert.match(diagnostics().toString("utf8"), /rejected unexpected extension origin/);
 });
 
+test("pairing Native Host bridges partial initial frames through one descriptor-selected socket", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-a";
+  const challenge = {
+    socket_path: fixture.descriptor.socket_path,
+    message: {
+      type: "pair_challenge",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_mode: "initial",
+    },
+  };
+  const bridge = bridgeFor(challenge);
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const outputBytes = collect(output);
+  const diagnostics = collect(stderr);
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => connectionId,
+    socketConnector: bridge.connector,
+    now: PAIRING_NOW,
+  });
+  const start = encodeNativeMessage({ type: "pair_start", protocol_version: 1 });
+  const ack = encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) });
+  input.write(start.subarray(0, 2));
+  input.end(Buffer.concat([start.subarray(2), ack]));
+
+  assert.equal(await run, true);
+  assert.deepEqual(bridge.sent, [
+    {
+      type: "host_register",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_nonce: fixture.descriptor.pairing_nonce,
+    },
+    { type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) },
+  ]);
+  assert.deepEqual(new NativeMessageDecoder().push(outputBytes()), [challenge.message]);
+  assert.equal(diagnostics().length, 0);
+  assert.equal(bridge.closed, true);
+});
+
+test("pairing Native Host reaches the descriptor-selected session socket without a connector override", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const firstOutput = new Promise((resolve) => output.once("data", resolve));
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => "connection-integration",
+    now: PAIRING_NOW,
+  });
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  const [challenge] = new NativeMessageDecoder().push(await firstOutput);
+  assert.equal(challenge.type, "pair_challenge");
+  input.end(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-integration") }));
+  assert.equal(await run, true);
+  assert.equal(stderr.read(), null);
+});
+
+test("pairing Native Host validates resume bindings and cannot use another instance descriptor", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-b";
+  const challenge = {
+    socket_path: fixture.descriptor.socket_path,
+    message: {
+      type: "pair_challenge",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_mode: "resume",
+    },
+  };
+  const bridge = bridgeFor(challenge);
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => connectionId,
+    socketConnector: bridge.connector,
+    now: PAIRING_NOW,
+  });
+  input.end(Buffer.concat([
+    encodeNativeMessage({
+      type: "resume_start",
+      protocol_version: 1,
+      session_id: fixture.descriptor.session_id,
+      browser_instance_id: fixture.descriptor.browser_instance_id,
+      profile_instance_id: fixture.descriptor.profile_instance_id,
+      generation: fixture.descriptor.generation,
+      lease_id: fixture.descriptor.lease_id,
+    }),
+    encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) }),
+  ]));
+  assert.equal(await run, true);
+  assert.deepEqual(bridge.sent[0], { type: "resume", ...pairingIdentity(fixture.descriptor, connectionId) });
+
+  const foreignInput = new PassThrough();
+  const foreignOutput = new PassThrough();
+  const foreignStderr = new PassThrough();
+  const foreignRun = runPairingNativeHost({
+    input: foreignInput,
+    output: foreignOutput,
+    stderr: foreignStderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-b",
+    socketConnector: bridge.connector,
+    now: PAIRING_NOW,
+  });
+  foreignInput.end(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal(await foreignRun, false);
+  assert.equal(foreignOutput.read(), null);
+  assert.match(foreignStderr.read().toString("utf8"), /rejected pairing protocol/);
+
+  await writeFile(
+    fixture.paths.activeDescriptorPath,
+    `${JSON.stringify({ ...fixture.descriptor, browser_instance_id: "poc-b" })}\n`,
+    { mode: 0o600 },
+  );
+  const wrongDescriptorInput = new PassThrough();
+  const wrongDescriptorOutput = new PassThrough();
+  const wrongDescriptorStderr = new PassThrough();
+  const wrongDescriptorRun = runPairingNativeHost({
+    input: wrongDescriptorInput,
+    output: wrongDescriptorOutput,
+    stderr: wrongDescriptorStderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    socketConnector: bridge.connector,
+    now: PAIRING_NOW,
+  });
+  wrongDescriptorInput.end(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal(await wrongDescriptorRun, false);
+  assert.equal(wrongDescriptorOutput.read(), null);
+});
+
+test("pairing Native Host rejects socket failures, expired descriptors, and mismatched acknowledgements", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-a";
+  const rejectionInput = new PassThrough();
+  const rejectionOutput = new PassThrough();
+  const rejectionStderr = new PassThrough();
+  const rejected = runPairingNativeHost({
+    input: rejectionInput,
+    output: rejectionOutput,
+    stderr: rejectionStderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    socketConnector: async () => { throw new Error("socket refused"); },
+    now: PAIRING_NOW,
+  });
+  rejectionInput.end(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal(await rejected, false);
+
+  const originInput = new PassThrough();
+  originInput.end(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal(
+    await runPairingNativeHost({
+      input: originInput,
+      output: new PassThrough(),
+      stderr: new PassThrough(),
+      origin: `${GATE_1_EXTENSION_ORIGIN}wrong`,
+      runtimeRoot: fixture.runtimeRoot,
+      instanceId: "poc-a",
+      socketConnector: async () => { throw new Error("should not connect"); },
+      now: PAIRING_NOW,
+    }),
+    false,
+  );
+
+  const expiredInput = new PassThrough();
+  const expiredOutput = new PassThrough();
+  const expiredStderr = new PassThrough();
+  const expired = runPairingNativeHost({
+    input: expiredInput,
+    output: expiredOutput,
+    stderr: expiredStderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    socketConnector: async () => { throw new Error("should not connect"); },
+    now: new Date("2030-01-01T01:00:00.000Z"),
+  });
+  expiredInput.end(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal(await expired, false);
+
+  const mismatch = bridgeFor({
+    socket_path: fixture.descriptor.socket_path,
+    message: { type: "pair_challenge", ...pairingIdentity(fixture.descriptor, connectionId), pairing_mode: "initial" },
+  });
+  const mismatchInput = new PassThrough();
+  const mismatchOutput = new PassThrough();
+  const mismatchStderr = new PassThrough();
+  const mismatchedRun = runPairingNativeHost({
+    input: mismatchInput,
+    output: mismatchOutput,
+    stderr: mismatchStderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => connectionId,
+    socketConnector: mismatch.connector,
+    now: PAIRING_NOW,
+  });
+  mismatchInput.end(Buffer.concat([
+    encodeNativeMessage({ type: "pair_start", protocol_version: 1 }),
+    encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "other-connection") }),
+  ]));
+  assert.equal(await mismatchedRun, false);
+  assert.equal(mismatch.sent.length, 1);
+});
+
+test("pairing Native Host arguments are strict while the direct Gate 1 entry point remains explicit", () => {
+  assert.deepEqual(parseNativeHostArguments([GATE_1_EXTENSION_ORIGIN]), {
+    mode: "gate1",
+    origin: GATE_1_EXTENSION_ORIGIN,
+  });
+  assert.deepEqual(
+    parseNativeHostArguments([
+      "--pairing-runtime-root",
+      "/tmp/browser-poc",
+      "--pairing-instance-id",
+      "poc-a",
+      GATE_1_EXTENSION_ORIGIN,
+    ]),
+    {
+      mode: "pairing",
+      runtimeRoot: "/tmp/browser-poc",
+      instanceId: "poc-a",
+      origin: GATE_1_EXTENSION_ORIGIN,
+    },
+  );
+  assert.throws(() => parseNativeHostArguments(["--pairing-runtime-root", "/tmp", GATE_1_EXTENSION_ORIGIN]));
+  assert.throws(() => parseNativeHostArguments(["--pairing-runtime-root", "relative", "--pairing-instance-id", "poc-a", GATE_1_EXTENSION_ORIGIN]));
+});
+
 test("Native Messaging manifest install and uninstall protect pre-existing files", async () => {
   const root = await readTemporaryRoot("browser-poc-manifest-");
   const paths = resolveNativeHostPaths({
@@ -140,6 +475,8 @@ test("Native Messaging manifest install and uninstall protect pre-existing files
   assert.equal((await installNativeHost(paths)).installed, true);
   assert.equal(await readFile(paths.manifestPath, "utf8"), nativeHostManifestContent(paths));
   assert.equal(await readFile(paths.wrapperPath, "utf8"), nativeHostWrapperContent(paths));
+  assert.match(await readFile(paths.wrapperPath, "utf8"), /--pairing-runtime-root/);
+  assert.match(await readFile(paths.wrapperPath, "utf8"), /--pairing-instance-id 'poc-a'/);
   assert.equal((await stat(paths.manifestPath)).mode & 0o777, 0o600);
   assert.equal((await stat(paths.wrapperPath)).mode & 0o777, 0o700);
   assert.equal((await installNativeHost(paths)).installed, false);

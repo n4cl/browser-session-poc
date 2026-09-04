@@ -87,8 +87,9 @@ function assertDescriptor(descriptor) {
   if (!isNonEmptyString(descriptor.pairing_nonce)) {
     throw new TypeError("descriptor pairing nonce is invalid");
   }
+  const expiry = typeof descriptor.expires_at === "string" ? Date.parse(descriptor.expires_at) : Number.NaN;
   if (typeof descriptor.expires_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(descriptor.expires_at) ||
-    new Date(descriptor.expires_at).toISOString() !== descriptor.expires_at) {
+    !Number.isFinite(expiry) || new Date(expiry).toISOString() !== descriptor.expires_at) {
     throw new TypeError("descriptor expiration is invalid");
   }
 }

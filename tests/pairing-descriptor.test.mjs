@@ -18,6 +18,8 @@ import {
   loadOrCreateProfileMetadata,
   MACOS_UNIX_SOCKET_PATH_MAX_BYTES,
   resolvePairingPaths,
+  readActivePairingDescriptor,
+  readProfileMetadata,
   validatePairingDescriptor,
   validateSocketPath,
   writeActivePairingDescriptor,
@@ -240,6 +242,37 @@ test("active descriptor fails closed for invalid permissions and unknown fields"
         now: VALIDATION_TIME,
       }),
     /unexpected schema/,
+  );
+});
+
+test("Native Host readers only accept the current instance's private metadata and descriptor", async () => {
+  const { runtimeRoot, paths, metadata, descriptor } = await fixture("poc-a");
+  await writeActivePairingDescriptor(paths, descriptor, {
+    profileInstanceId: metadata.profile_instance_id,
+    now: VALIDATION_TIME,
+  });
+  assert.deepEqual(await readProfileMetadata(paths), metadata);
+  assert.deepEqual(
+    await readActivePairingDescriptor(paths, {
+      profileInstanceId: metadata.profile_instance_id,
+      now: VALIDATION_TIME,
+    }),
+    descriptor,
+  );
+
+  await chmod(paths.activeDescriptorPath, 0o644);
+  await assert.rejects(
+    () => readActivePairingDescriptor(paths, { profileInstanceId: metadata.profile_instance_id, now: VALIDATION_TIME }),
+    /mode 600/,
+  );
+  await chmod(paths.activeDescriptorPath, 0o600);
+  await unlink(paths.activeDescriptorPath);
+  const outside = path.join(runtimeRoot, "outside-descriptor.json");
+  await writeFile(outside, `${JSON.stringify(descriptor)}\n`, { mode: 0o600 });
+  await symlink(outside, paths.activeDescriptorPath);
+  await assert.rejects(
+    () => readActivePairingDescriptor(paths, { profileInstanceId: metadata.profile_instance_id, now: VALIDATION_TIME }),
+    /symbolic link/,
   );
 });
 
