@@ -53,6 +53,22 @@ test("harness publishes only after listening, increments generation, and cleans 
   await second.close();
 });
 
+test("harness defaults its descriptor lease to ten minutes", async (t) => {
+  const runtimeRoot = await temporaryRuntimeRoot();
+  const issuedAt = new Date("2030-01-01T00:00:00.000Z");
+  const harness = await startPairingHarness({
+    ...harnessOptions(runtimeRoot, "poc-a"),
+    now: () => issuedAt,
+  });
+  t.after(() => harness.close().catch(() => {}));
+
+  assert.equal(
+    Date.parse(harness.descriptor.expires_at) - Date.parse(harness.descriptor.issued_at),
+    600_000,
+  );
+  await harness.close();
+});
+
 test("harness rejects a second claim while preserving the first instance", async (t) => {
   const runtimeRoot = await temporaryRuntimeRoot();
   const harness = await startPairingHarness(harnessOptions(runtimeRoot, "poc-a"));
