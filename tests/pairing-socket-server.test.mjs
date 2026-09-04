@@ -1,0 +1,187 @@
+import assert from "node:assert/strict";
+import net from "node:net";
+import { lstat, mkdtemp, stat, writeFile, unlink } from "node:fs/promises";
+import { once } from "node:events";
+import path from "node:path";
+import test from "node:test";
+import { encodeNativeMessage, NativeMessageDecoder } from "../native-host/codec.mjs";
+import {
+  createPairingDescriptor,
+  createSocketPath,
+  loadOrCreateProfileMetadata,
+  resolvePairingPaths,
+} from "../core/pairing-descriptor.mjs";
+import { PAIRING_SOCKET_MAX_MESSAGE_BYTES, PairingSocketServer } from "../core/pairing-socket-server.mjs";
+
+const ISSUED_AT = "2030-01-01T00:00:00.000Z";
+const EXPIRES_AT = "2030-01-01T01:00:00.000Z";
+const NOW = new Date("2030-01-01T00:30:00.000Z");
+
+async function serverFixture(instanceId, suffix) {
+  const runtimeRoot = await mkdtemp(path.join("/private/tmp", "bsp-socket-"));
+  const paths = resolvePairingPaths({ runtimeRoot, instanceId });
+  const metadata = await loadOrCreateProfileMetadata(paths, {
+    createUuid: () => `11111111-1111-4111-8111-${suffix}`,
+  });
+  const socketPath = await createSocketPath(paths, {
+    createUuid: () => `22222222-2222-4222-8222-${suffix}`,
+  });
+  const descriptor = createPairingDescriptor({
+    paths,
+    profileInstanceId: metadata.profile_instance_id,
+    sessionId: `session-${instanceId}`,
+    generation: 1,
+    socketPath,
+    issuedAt: ISSUED_AT,
+    expiresAt: EXPIRES_AT,
+    leaseId: `lease-${instanceId}`,
+    pairingNonce: `nonce-${instanceId}`,
+  });
+  const server = new PairingSocketServer({
+    paths,
+    descriptor,
+    profileInstanceId: metadata.profile_instance_id,
+    now: NOW,
+  });
+  return { paths, metadata, descriptor, server };
+}
+
+function identity(descriptor, connectionId) {
+  return {
+    protocol_version: 1,
+    session_id: descriptor.session_id,
+    browser_instance_id: descriptor.browser_instance_id,
+    profile_instance_id: descriptor.profile_instance_id,
+    generation: descriptor.generation,
+    lease_id: descriptor.lease_id,
+    host_connection_id: connectionId,
+  };
+}
+
+function message(descriptor, type, connectionId, extra = {}) {
+  return { type, ...identity(descriptor, connectionId), ...extra };
+}
+
+async function framedClient(socketPath) {
+  const socket = net.createConnection(socketPath);
+  await once(socket, "connect");
+  socket.on("error", () => {});
+  const decoder = new NativeMessageDecoder({ maxBytes: PAIRING_SOCKET_MAX_MESSAGE_BYTES });
+  const messages = [];
+  let waiter = null;
+  socket.on("data", (chunk) => {
+    for (const item of decoder.push(chunk)) {
+      messages.push(item);
+    }
+    if (waiter && messages.length > 0) {
+      const resolve = waiter;
+      waiter = null;
+      resolve(messages.shift());
+    }
+  });
+  return {
+    socket,
+    send(value) { socket.write(value); },
+    next() {
+      if (messages.length > 0) return Promise.resolve(messages.shift());
+      return new Promise((resolve) => { waiter = resolve; });
+    },
+  };
+}
+
+async function activate(client, descriptor, connectionId = "connection-a") {
+  client.send(encodeNativeMessage(message(descriptor, "host_register", connectionId, { pairing_nonce: descriptor.pairing_nonce })));
+  const challenge = await client.next();
+  assert.equal(challenge.type, "pair_challenge");
+  client.send(encodeNativeMessage(message(descriptor, "pair_ack", connectionId)));
+}
+
+test("socket transport accepts partial and multiple framed messages, then returns an identity-bound ping", async (t) => {
+  const fixture = await serverFixture("poc-a", "111111111111");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  assert.equal((await stat(fixture.paths.socketDirectory)).mode & 0o777, 0o700);
+  assert.equal((await stat(fixture.descriptor.socket_path)).mode & 0o777, 0o600);
+
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  const registration = encodeNativeMessage(message(fixture.descriptor, "host_register", "connection-a", {
+    pairing_nonce: fixture.descriptor.pairing_nonce,
+  }));
+  client.send(registration.subarray(0, 3));
+  client.send(registration.subarray(3));
+  const challenge = await client.next();
+  assert.equal(challenge.type, "pair_challenge");
+
+  const acknowledgement = encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-a"));
+  const ping = encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-a", { request_id: "request-a" }));
+  client.send(Buffer.concat([acknowledgement, ping]));
+  const response = await client.next();
+  assert.deepEqual(response, message(fixture.descriptor, "ping_response", "connection-a", { request_id: "request-a" }));
+
+  const resumeClient = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => resumeClient.socket.destroy());
+  const oldConnectionClosed = once(client.socket, "close");
+  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "resume", "connection-b")));
+  assert.equal((await resumeClient.next()).pairing_mode, "resume");
+  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-b")));
+  await oldConnectionClosed;
+  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-b", { request_id: "request-b" })));
+  assert.equal((await resumeClient.next()).request_id, "request-b");
+});
+
+test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {
+  const fixture = await serverFixture("poc-a", "222222222222");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+
+  const invalid = await framedClient(fixture.descriptor.socket_path);
+  const invalidClosed = once(invalid.socket, "close");
+  invalid.send(Buffer.from([1, 0, 0, 0, 0xff]));
+  await invalidClosed;
+  assert.equal(fixture.server.state.phase, "ISSUED");
+
+  const oversized = await framedClient(fixture.descriptor.socket_path);
+  const oversizedClosed = once(oversized.socket, "close");
+  const header = Buffer.alloc(4);
+  header.writeUInt32LE(PAIRING_SOCKET_MAX_MESSAGE_BYTES + 1);
+  oversized.send(header);
+  await oversizedClosed;
+  assert.equal(fixture.server.state.phase, "ISSUED");
+});
+
+test("an existing path is preserved and a server removes only its own socket on close", async (t) => {
+  const fixture = await serverFixture("poc-a", "333333333333");
+  await writeFile(fixture.descriptor.socket_path, "sentinel", { mode: 0o600 });
+  await assert.rejects(() => fixture.server.listen(), /refusing to replace/);
+  assert.equal((await lstat(fixture.descriptor.socket_path)).isFile(), true);
+  await unlink(fixture.descriptor.socket_path);
+
+  await fixture.server.listen();
+  assert.equal((await lstat(fixture.descriptor.socket_path)).isSocket(), true);
+  await fixture.server.close();
+  await assert.rejects(() => lstat(fixture.descriptor.socket_path), { code: "ENOENT" });
+  t.after(() => fixture.server.close());
+});
+
+test("A and B sockets remain independent when B fails before A starts", async (t) => {
+  const a = await serverFixture("poc-a", "444444444444");
+  const b = await serverFixture("poc-b", "555555555555");
+  t.after(() => Promise.all([a.server.close(), b.server.close()]));
+  await b.server.listen();
+  await a.server.listen();
+
+  const aClient = await framedClient(a.descriptor.socket_path);
+  t.after(() => aClient.socket.destroy());
+  await activate(aClient, a.descriptor);
+
+  const bClient = await framedClient(b.descriptor.socket_path);
+  t.after(() => bClient.socket.destroy());
+  const bClosed = once(bClient.socket, "close");
+  bClient.send(encodeNativeMessage(message(b.descriptor, "host_register", "connection-b", { pairing_nonce: "wrong" })));
+  await bClosed;
+  assert.equal(b.server.state.phase, "ISSUED");
+
+  aClient.send(encodeNativeMessage(message(a.descriptor, "ping_request", "connection-a", { request_id: "a-still-active" })));
+  assert.equal((await aClient.next()).request_id, "a-still-active");
+});

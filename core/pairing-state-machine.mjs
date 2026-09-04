@@ -1,0 +1,247 @@
+export const PAIRING_PROTOCOL_VERSION = 1;
+
+export const PAIRING_STATES = Object.freeze({
+  ISSUED: "ISSUED",
+  PAIRING: "PAIRING",
+  ACTIVE: "ACTIVE",
+  REVOKED: "REVOKED",
+});
+
+const IDENTITY_FIELDS = [
+  "session_id",
+  "browser_instance_id",
+  "profile_instance_id",
+  "generation",
+  "lease_id",
+];
+
+export class PairingProtocolError extends Error {
+  constructor(message = "pairing protocol violation") {
+    super(message);
+    this.name = "PairingProtocolError";
+  }
+}
+
+function fail(message) {
+  throw new PairingProtocolError(message);
+}
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0 && value.trim() === value;
+}
+
+function assertExactFields(message, fields) {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    fail("message must be an object");
+  }
+  const actual = Object.keys(message).sort();
+  const expected = [...fields].sort();
+  if (actual.length !== expected.length || actual.some((field, index) => field !== expected[index])) {
+    fail("message has an unexpected schema");
+  }
+}
+
+function assertMessageIdentity(message, binding, { connectionId = undefined } = {}) {
+  if (message.protocol_version !== PAIRING_PROTOCOL_VERSION) {
+    fail("unsupported protocol version");
+  }
+  for (const field of IDENTITY_FIELDS) {
+    if (message[field] !== binding[field]) {
+      fail("message identity does not match the session binding");
+    }
+  }
+  if (!isNonEmptyString(message.host_connection_id)) {
+    fail("host connection id is invalid");
+  }
+  if (connectionId !== undefined && message.host_connection_id !== connectionId) {
+    fail("message connection does not match the active pairing");
+  }
+}
+
+function identityMessage(binding, hostConnectionId) {
+  return {
+    protocol_version: PAIRING_PROTOCOL_VERSION,
+    ...binding,
+    host_connection_id: hostConnectionId,
+  };
+}
+
+function withChallenge(binding, hostConnectionId, mode) {
+  return {
+    type: "pair_challenge",
+    ...identityMessage(binding, hostConnectionId),
+    pairing_mode: mode,
+  };
+}
+
+function assertDescriptor(descriptor) {
+  if (!descriptor || typeof descriptor !== "object") {
+    throw new TypeError("descriptor must be an object");
+  }
+  for (const field of IDENTITY_FIELDS) {
+    if ((field === "generation" && (!Number.isSafeInteger(descriptor[field]) || descriptor[field] <= 0)) ||
+      (field !== "generation" && !isNonEmptyString(descriptor[field]))) {
+      throw new TypeError("descriptor binding is invalid");
+    }
+  }
+  if (!isNonEmptyString(descriptor.pairing_nonce)) {
+    throw new TypeError("descriptor pairing nonce is invalid");
+  }
+}
+
+function assertRegisterMessage(message, binding, nonce) {
+  assertExactFields(message, ["type", "pairing_nonce", ...IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+  if (message.type !== "host_register") {
+    fail("expected host_register");
+  }
+  assertMessageIdentity(message, binding);
+  if (message.pairing_nonce !== nonce) {
+    fail("pairing nonce does not match");
+  }
+}
+
+function assertAckMessage(message, binding, connectionId) {
+  assertExactFields(message, ["type", ...IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+  if (message.type !== "pair_ack") {
+    fail("expected pair_ack");
+  }
+  assertMessageIdentity(message, binding, { connectionId });
+}
+
+function assertResumeMessage(message, binding) {
+  assertExactFields(message, ["type", ...IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+  if (message.type !== "resume") {
+    fail("expected resume");
+  }
+  assertMessageIdentity(message, binding);
+}
+
+function assertPingMessage(message, binding, connectionId) {
+  assertExactFields(message, ["type", "request_id", ...IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+  if (message.type !== "ping_request") {
+    fail("expected ping_request");
+  }
+  assertMessageIdentity(message, binding, { connectionId });
+  if (!isNonEmptyString(message.request_id)) {
+    fail("request id is invalid");
+  }
+}
+
+function next(state, changes, effects = []) {
+  return { state: { ...state, ...changes }, effects };
+}
+
+/**
+ * Builds the side-effect-free state derived from one validated active descriptor.
+ */
+export function createPairingState(descriptor) {
+  assertDescriptor(descriptor);
+  return {
+    phase: PAIRING_STATES.ISSUED,
+    binding: Object.fromEntries(IDENTITY_FIELDS.map((field) => [field, descriptor[field]])),
+    pairingNonce: descriptor.pairing_nonce,
+    nonceConsumed: false,
+    activeConnectionId: null,
+    candidateConnectionId: null,
+    candidateKind: null,
+  };
+}
+
+/**
+ * Applies one verified protocol message. Invalid input throws and leaves the caller's state unchanged.
+ */
+export function reducePairingMessage(state, message) {
+  if (!state || !Object.values(PAIRING_STATES).includes(state.phase)) {
+    throw new TypeError("pairing state is invalid");
+  }
+
+  const { binding } = state;
+  switch (message?.type) {
+    case "host_register": {
+      if (state.phase !== PAIRING_STATES.ISSUED || state.nonceConsumed) {
+        fail("host registration is not permitted in the current state");
+      }
+      assertRegisterMessage(message, binding, state.pairingNonce);
+      const connectionId = message.host_connection_id;
+      return next(state, {
+        phase: PAIRING_STATES.PAIRING,
+        nonceConsumed: true,
+        candidateConnectionId: connectionId,
+        candidateKind: "initial",
+      }, [{ type: "send", connectionId, message: withChallenge(binding, connectionId, "initial") }]);
+    }
+    case "pair_ack": {
+      if (![
+        PAIRING_STATES.PAIRING,
+        PAIRING_STATES.ACTIVE,
+      ].includes(state.phase) || !state.candidateConnectionId) {
+        fail("pair acknowledgement is not permitted in the current state");
+      }
+      assertAckMessage(message, binding, state.candidateConnectionId);
+      const oldConnectionId = state.activeConnectionId;
+      const connectionId = state.candidateConnectionId;
+      const effects = oldConnectionId === null ? [] : [{ type: "fence", connectionId: oldConnectionId }];
+      return next(state, {
+        phase: PAIRING_STATES.ACTIVE,
+        activeConnectionId: connectionId,
+        candidateConnectionId: null,
+        candidateKind: null,
+      }, effects);
+    }
+    case "resume": {
+      if (state.phase !== PAIRING_STATES.ACTIVE || state.candidateConnectionId !== null) {
+        fail("resume is not permitted in the current state");
+      }
+      assertResumeMessage(message, binding);
+      if (message.host_connection_id === state.activeConnectionId) {
+        fail("resume requires a new host connection");
+      }
+      const connectionId = message.host_connection_id;
+      return next(state, {
+        candidateConnectionId: connectionId,
+        candidateKind: "resume",
+      }, [{ type: "send", connectionId, message: withChallenge(binding, connectionId, "resume") }]);
+    }
+    case "ping_request": {
+      if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
+        fail("ping is not permitted in the current state");
+      }
+      assertPingMessage(message, binding, state.activeConnectionId);
+      return next(state, {}, [{
+        type: "send",
+        connectionId: state.activeConnectionId,
+        message: {
+          type: "ping_response",
+          ...identityMessage(binding, state.activeConnectionId),
+          request_id: message.request_id,
+        },
+      }]);
+    }
+    default:
+      fail("message type is not permitted");
+  }
+}
+
+/**
+ * Models transport loss without performing any I/O. A lost initial candidate revokes the descriptor;
+ * a lost resume candidate leaves the existing active connection unchanged.
+ */
+export function disconnectPairingConnection(state, connectionId) {
+  if (!isNonEmptyString(connectionId)) {
+    throw new TypeError("host connection id is invalid");
+  }
+  if (state.phase === PAIRING_STATES.PAIRING && state.candidateConnectionId === connectionId) {
+    return next(state, {
+      phase: PAIRING_STATES.REVOKED,
+      candidateConnectionId: null,
+      candidateKind: null,
+    });
+  }
+  if (state.phase === PAIRING_STATES.ACTIVE && state.candidateConnectionId === connectionId) {
+    return next(state, { candidateConnectionId: null, candidateKind: null });
+  }
+  if (state.phase === PAIRING_STATES.ACTIVE && state.activeConnectionId === connectionId) {
+    return next(state, { activeConnectionId: null });
+  }
+  return next(state, {});
+}
