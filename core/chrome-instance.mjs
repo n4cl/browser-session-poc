@@ -30,12 +30,9 @@ export function resolveInstancePaths({ runtimeRoot, instanceId }) {
   };
 }
 
-export function buildChromeArguments({ userDataDir, extensionDir, initialUrl = "about:blank" }) {
+export function buildChromeArguments({ userDataDir, initialUrl = "about:blank" }) {
   if (!path.isAbsolute(userDataDir)) {
     throw new Error("user data directory must be an absolute path");
-  }
-  if (extensionDir !== undefined && !path.isAbsolute(extensionDir)) {
-    throw new Error("extension directory must be an absolute path");
   }
 
   const arguments_ = [
@@ -43,9 +40,6 @@ export function buildChromeArguments({ userDataDir, extensionDir, initialUrl = "
     "--no-first-run",
     "--no-default-browser-check",
   ];
-  if (extensionDir !== undefined) {
-    arguments_.push(`--load-extension=${extensionDir}`);
-  }
   arguments_.push("--new-window", initialUrl);
   return arguments_;
 }

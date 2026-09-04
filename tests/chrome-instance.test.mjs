@@ -31,19 +31,24 @@ test("instance paths are isolated by browser instance ID", () => {
   assert.equal(a.userDataDir, path.resolve("/tmp/browser-poc/profiles/a"));
 });
 
-test("Chrome arguments always use absolute dedicated profile and extension paths", () => {
+test("Chrome arguments use an absolute dedicated profile and never auto-load an extension", () => {
   const args = buildChromeArguments({
     userDataDir: "/tmp/browser-poc/profiles/a",
-    extensionDir: "/tmp/browser-poc/extension",
   });
   assert.ok(args.includes("--user-data-dir=/tmp/browser-poc/profiles/a"));
-  assert.ok(args.includes("--load-extension=/tmp/browser-poc/extension"));
+  assert.equal(args.some((argument) => argument.startsWith("--load-extension=")), false);
   assert.throws(() => buildChromeArguments({ userDataDir: "relative/profile" }));
-  assert.throws(() =>
-    buildChromeArguments({
-      userDataDir: "/tmp/browser-poc/profiles/a",
-      extensionDir: "relative/extension",
-    }),
+});
+
+test("provisioning arguments open chrome extensions without auto-loading", () => {
+  const args = buildChromeArguments({
+    userDataDir: "/tmp/browser-poc/profiles/a",
+    initialUrl: "chrome://extensions",
+  });
+  assert.equal(args.at(-1), "chrome://extensions");
+  assert.equal(
+    args.some((argument) => argument.startsWith("--load-extension=")),
+    false,
   );
 });
 

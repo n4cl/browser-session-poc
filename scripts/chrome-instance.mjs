@@ -24,6 +24,7 @@ function usage() {
     "Usage:",
     "  npm run chrome -- plan <instance-id>",
     "  npm run chrome -- start <instance-id>",
+    "  npm run chrome -- provision <instance-id>",
     "  npm run chrome -- status <instance-id>",
     "  npm run chrome -- stop <instance-id>",
     "",
@@ -33,7 +34,7 @@ function usage() {
   ].join("\n");
 }
 
-function configuration(instanceId) {
+function configuration(instanceId, { initialUrl = "about:blank" } = {}) {
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
   const runtimeRoot = process.env.BROWSER_POC_RUNTIME_ROOT
     ? path.resolve(process.env.BROWSER_POC_RUNTIME_ROOT)
@@ -44,7 +45,7 @@ function configuration(instanceId) {
   const extensionDir = path.join(repositoryRoot, "extension");
   const chromeArguments = buildChromeArguments({
     userDataDir: paths.userDataDir,
-    extensionDir,
+    initialUrl,
   });
 
   return { instanceId, chromeExecutable, chromeArguments, extensionDir, ...paths };
@@ -75,7 +76,7 @@ async function plan(instanceId) {
         browser_instance_id: config.instanceId,
         chrome_executable: config.chromeExecutable,
         chrome_arguments: config.chromeArguments,
-        extension_dir: config.extensionDir,
+        manual_extension_directory: config.extensionDir,
         user_data_dir: config.userDataDir,
         state_path: config.statePath,
         claim_path: config.claimPath,
@@ -86,8 +87,8 @@ async function plan(instanceId) {
   );
 }
 
-async function start(instanceId) {
-  const config = configuration(instanceId);
+async function start(instanceId, { initialUrl = "about:blank", showManualExtensionDirectory = false } = {}) {
+  const config = configuration(instanceId, { initialUrl });
   await assertChromeExecutable(config.chromeExecutable);
   assertProcessInspectionAvailable();
   const owner = {
@@ -135,7 +136,19 @@ async function start(instanceId) {
     };
     await writeStateAtomically(config.statePath, state);
     stateWritten = true;
-    process.stdout.write(`${JSON.stringify(state, null, 2)}\n`);
+    process.stdout.write(
+      `${JSON.stringify(
+        showManualExtensionDirectory
+          ? {
+              ...state,
+              manual_extension_directory: config.extensionDir,
+              next_step: "Use Load unpacked in chrome://extensions and select manual_extension_directory",
+            }
+          : state,
+        null,
+        2,
+      )}\n`,
+    );
   } catch (error) {
     if (!child) {
       await releaseInstanceClaim(config.claimPath);
@@ -205,6 +218,11 @@ try {
     await plan(instanceId);
   } else if (command === "start") {
     await start(instanceId);
+  } else if (command === "provision") {
+    await start(instanceId, {
+      initialUrl: "chrome://extensions",
+      showManualExtensionDirectory: true,
+    });
   } else if (command === "status") {
     await status(instanceId);
   } else if (command === "stop") {
