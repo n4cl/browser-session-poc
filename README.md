@@ -17,3 +17,5 @@ npm run chrome -- plan poc-b
 ```
 
 `start` は実際にChromeを起動するため、Gate 0の非GUI確認には含めない。起動前にmacOSのprocess inspectionが利用可能か確認し、利用できない環境ではChromeを起動しない。`stop` は記録済みのPID、起動時刻、Chrome実行ファイル、専用profile引数が全て一致するときだけ停止する。終了を確認できない場合はinstance claimを保持し、同じprofileの再起動を拒否する。
+
+Gate 1はNative MessagingのcodecとHost単体契約までを実装済みだが、Chrome実機の最小疎通は未成立である。詳細は[Gate 1実機試験結果](./docs/gate-1-results.md)を参照する。

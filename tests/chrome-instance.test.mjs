@@ -31,10 +31,20 @@ test("instance paths are isolated by browser instance ID", () => {
   assert.equal(a.userDataDir, path.resolve("/tmp/browser-poc/profiles/a"));
 });
 
-test("Chrome arguments always use an absolute dedicated user data directory", () => {
-  const args = buildChromeArguments({ userDataDir: "/tmp/browser-poc/profiles/a" });
+test("Chrome arguments always use absolute dedicated profile and extension paths", () => {
+  const args = buildChromeArguments({
+    userDataDir: "/tmp/browser-poc/profiles/a",
+    extensionDir: "/tmp/browser-poc/extension",
+  });
   assert.ok(args.includes("--user-data-dir=/tmp/browser-poc/profiles/a"));
+  assert.ok(args.includes("--load-extension=/tmp/browser-poc/extension"));
   assert.throws(() => buildChromeArguments({ userDataDir: "relative/profile" }));
+  assert.throws(() =>
+    buildChromeArguments({
+      userDataDir: "/tmp/browser-poc/profiles/a",
+      extensionDir: "relative/extension",
+    }),
+  );
 });
 
 test("claim acquisition rejects a second owner", async () => {

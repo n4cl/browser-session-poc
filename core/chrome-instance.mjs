@@ -30,18 +30,24 @@ export function resolveInstancePaths({ runtimeRoot, instanceId }) {
   };
 }
 
-export function buildChromeArguments({ userDataDir, initialUrl = "about:blank" }) {
+export function buildChromeArguments({ userDataDir, extensionDir, initialUrl = "about:blank" }) {
   if (!path.isAbsolute(userDataDir)) {
     throw new Error("user data directory must be an absolute path");
   }
+  if (extensionDir !== undefined && !path.isAbsolute(extensionDir)) {
+    throw new Error("extension directory must be an absolute path");
+  }
 
-  return [
+  const arguments_ = [
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
-    "--new-window",
-    initialUrl,
   ];
+  if (extensionDir !== undefined) {
+    arguments_.push(`--load-extension=${extensionDir}`);
+  }
+  arguments_.push("--new-window", initialUrl);
+  return arguments_;
 }
 
 export async function assertChromeExecutable(chromeExecutable) {

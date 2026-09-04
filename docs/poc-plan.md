@@ -104,7 +104,9 @@ pairing pageへnonceを渡す方式がChrome上で安定しない場合は、こ
 - 固定IDを持つ最小Extension
 - Native Messaging Host manifest生成・導入・削除script
 - Native Messagingのlength-prefixed JSON codec
-- `hello`、`ping`、`status`だけのprotocol
+- `hello`、`hello_ack`、`ack`だけの最小protocol
+
+Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し、`hello`→`hello_ack`→`ack`を最小protocolとする。Native Messagingのmessage size上限はChrome→Hostが64 MiB、Host→Chromeが1 MiBであり、codec testで方向を区別する。
 
 合格条件:
 

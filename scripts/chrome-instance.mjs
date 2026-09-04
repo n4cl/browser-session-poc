@@ -41,9 +41,13 @@ function configuration(instanceId) {
   const chromeExecutable =
     process.env.BROWSER_POC_CHROME || DEFAULT_CHROME_EXECUTABLE;
   const paths = resolveInstancePaths({ runtimeRoot, instanceId });
-  const chromeArguments = buildChromeArguments({ userDataDir: paths.userDataDir });
+  const extensionDir = path.join(repositoryRoot, "extension");
+  const chromeArguments = buildChromeArguments({
+    userDataDir: paths.userDataDir,
+    extensionDir,
+  });
 
-  return { instanceId, chromeExecutable, chromeArguments, ...paths };
+  return { instanceId, chromeExecutable, chromeArguments, extensionDir, ...paths };
 }
 
 function assertStateMatchesConfiguration(state, config) {
@@ -71,6 +75,7 @@ async function plan(instanceId) {
         browser_instance_id: config.instanceId,
         chrome_executable: config.chromeExecutable,
         chrome_arguments: config.chromeArguments,
+        extension_dir: config.extensionDir,
         user_data_dir: config.userDataDir,
         state_path: config.statePath,
         claim_path: config.claimPath,
