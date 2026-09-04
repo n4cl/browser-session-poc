@@ -87,6 +87,23 @@ function assertDescriptor(descriptor) {
   if (!isNonEmptyString(descriptor.pairing_nonce)) {
     throw new TypeError("descriptor pairing nonce is invalid");
   }
+  if (typeof descriptor.expires_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(descriptor.expires_at) ||
+    new Date(descriptor.expires_at).toISOString() !== descriptor.expires_at) {
+    throw new TypeError("descriptor expiration is invalid");
+  }
+}
+
+function timestampOf(now) {
+  if (!(now instanceof Date) || !Number.isFinite(now.valueOf())) {
+    throw new TypeError("clock must return a valid Date");
+  }
+  return now.valueOf();
+}
+
+function assertLive(state, now) {
+  if (timestampOf(now) >= state.expiresAt) {
+    fail("pairing lease has expired");
+  }
 }
 
 function assertRegisterMessage(message, binding, nonce) {
@@ -144,16 +161,19 @@ export function createPairingState(descriptor) {
     activeConnectionId: null,
     candidateConnectionId: null,
     candidateKind: null,
+    usedConnectionIds: [],
+    expiresAt: Date.parse(descriptor.expires_at),
   };
 }
 
 /**
  * Applies one verified protocol message. Invalid input throws and leaves the caller's state unchanged.
  */
-export function reducePairingMessage(state, message) {
+export function reducePairingMessage(state, message, { now = new Date() } = {}) {
   if (!state || !Object.values(PAIRING_STATES).includes(state.phase)) {
     throw new TypeError("pairing state is invalid");
   }
+  assertLive(state, now);
 
   const { binding } = state;
   switch (message?.type) {
@@ -163,11 +183,15 @@ export function reducePairingMessage(state, message) {
       }
       assertRegisterMessage(message, binding, state.pairingNonce);
       const connectionId = message.host_connection_id;
+      if (state.usedConnectionIds.includes(connectionId)) {
+        fail("host connection id has already been used");
+      }
       return next(state, {
         phase: PAIRING_STATES.PAIRING,
         nonceConsumed: true,
         candidateConnectionId: connectionId,
         candidateKind: "initial",
+        usedConnectionIds: [...state.usedConnectionIds, connectionId],
       }, [{ type: "send", connectionId, message: withChallenge(binding, connectionId, "initial") }]);
     }
     case "pair_ack": {
@@ -197,9 +221,13 @@ export function reducePairingMessage(state, message) {
         fail("resume requires a new host connection");
       }
       const connectionId = message.host_connection_id;
+      if (state.usedConnectionIds.includes(connectionId)) {
+        fail("host connection id has already been used");
+      }
       return next(state, {
         candidateConnectionId: connectionId,
         candidateKind: "resume",
+        usedConnectionIds: [...state.usedConnectionIds, connectionId],
       }, [{ type: "send", connectionId, message: withChallenge(binding, connectionId, "resume") }]);
     }
     case "ping_request": {
@@ -220,6 +248,26 @@ export function reducePairingMessage(state, message) {
     default:
       fail("message type is not permitted");
   }
+}
+
+/**
+ * Revokes the lease at its inclusive expiry boundary and identifies any active transport connections
+ * that must be fenced by the caller.
+ */
+export function expirePairingState(state, now = new Date()) {
+  if (!state || !Object.values(PAIRING_STATES).includes(state.phase)) {
+    throw new TypeError("pairing state is invalid");
+  }
+  if (timestampOf(now) < state.expiresAt || state.phase === PAIRING_STATES.REVOKED) {
+    return next(state, {});
+  }
+  const connectionIds = [...new Set([state.activeConnectionId, state.candidateConnectionId].filter(Boolean))];
+  return next(state, {
+    phase: PAIRING_STATES.REVOKED,
+    activeConnectionId: null,
+    candidateConnectionId: null,
+    candidateKind: null,
+  }, connectionIds.map((connectionId) => ({ type: "fence", connectionId })));
 }
 
 /**

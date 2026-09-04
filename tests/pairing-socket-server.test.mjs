@@ -17,7 +17,7 @@ const ISSUED_AT = "2030-01-01T00:00:00.000Z";
 const EXPIRES_AT = "2030-01-01T01:00:00.000Z";
 const NOW = new Date("2030-01-01T00:30:00.000Z");
 
-async function serverFixture(instanceId, suffix) {
+async function serverFixture(instanceId, suffix, serverOptions = {}) {
   const runtimeRoot = await mkdtemp(path.join("/private/tmp", "bsp-socket-"));
   const paths = resolvePairingPaths({ runtimeRoot, instanceId });
   const metadata = await loadOrCreateProfileMetadata(paths, {
@@ -42,6 +42,7 @@ async function serverFixture(instanceId, suffix) {
     descriptor,
     profileInstanceId: metadata.profile_instance_id,
     now: NOW,
+    ...serverOptions,
   });
   return { paths, metadata, descriptor, server };
 }
@@ -89,14 +90,15 @@ async function framedClient(socketPath) {
   };
 }
 
-async function activate(client, descriptor, connectionId = "connection-a") {
+// This is a native-host-to-session-socket transport probe, not an Extension round-trip harness.
+async function activateHostToSessionSocket(client, descriptor, connectionId = "connection-a") {
   client.send(encodeNativeMessage(message(descriptor, "host_register", connectionId, { pairing_nonce: descriptor.pairing_nonce })));
   const challenge = await client.next();
   assert.equal(challenge.type, "pair_challenge");
   client.send(encodeNativeMessage(message(descriptor, "pair_ack", connectionId)));
 }
 
-test("socket transport accepts partial and multiple framed messages, then returns an identity-bound ping", async (t) => {
+test("native host-to-session socket transport accepts partial and multiple frames", async (t) => {
   const fixture = await serverFixture("poc-a", "111111111111");
   t.after(() => fixture.server.close());
   await fixture.server.listen();
@@ -173,7 +175,7 @@ test("A and B sockets remain independent when B fails before A starts", async (t
 
   const aClient = await framedClient(a.descriptor.socket_path);
   t.after(() => aClient.socket.destroy());
-  await activate(aClient, a.descriptor);
+  await activateHostToSessionSocket(aClient, a.descriptor);
 
   const bClient = await framedClient(b.descriptor.socket_path);
   t.after(() => bClient.socket.destroy());
@@ -184,4 +186,56 @@ test("A and B sockets remain independent when B fails before A starts", async (t
 
   aClient.send(encodeNativeMessage(message(a.descriptor, "ping_request", "connection-a", { request_id: "a-still-active" })));
   assert.equal((await aClient.next()).request_id, "a-still-active");
+});
+
+test("the idle expiry timer revokes an active session and fences its socket", async (t) => {
+  let currentTime = new Date("2030-01-01T00:30:00.000Z");
+  const timers = [];
+  const fixture = await serverFixture("poc-a", "666666666666", {
+    clock: () => currentTime,
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => { timer.cancelled = true; },
+  });
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  assert.equal(timers.length, 1);
+
+  const client = await framedClient(fixture.descriptor.socket_path);
+  await activateHostToSessionSocket(client, fixture.descriptor);
+  const candidate = await framedClient(fixture.descriptor.socket_path);
+  candidate.send(encodeNativeMessage(message(fixture.descriptor, "resume", "connection-b")));
+  assert.equal((await candidate.next()).pairing_mode, "resume");
+  const activeClosed = once(client.socket, "close");
+  const candidateClosed = once(candidate.socket, "close");
+  currentTime = new Date(EXPIRES_AT);
+  timers[0].callback();
+  await Promise.all([activeClosed, candidateClosed]);
+  assert.equal(fixture.server.state.phase, "REVOKED");
+
+  const rejected = await framedClient(fixture.descriptor.socket_path);
+  const rejectedClosed = once(rejected.socket, "close");
+  rejected.send(encodeNativeMessage(message(fixture.descriptor, "host_register", "connection-b", {
+    pairing_nonce: fixture.descriptor.pairing_nonce,
+  })));
+  await rejectedClosed;
+});
+
+test("close cancels an outstanding expiry timer", async () => {
+  const timers = [];
+  const fixture = await serverFixture("poc-a", "777777777777", {
+    setTimer: (callback, delay) => {
+      const timer = { callback, delay, cancelled: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => { timer.cancelled = true; },
+  });
+  await fixture.server.listen();
+  assert.equal(timers.length, 1);
+  await fixture.server.close();
+  assert.equal(timers[0].cancelled, true);
 });

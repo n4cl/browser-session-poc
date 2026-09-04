@@ -5,6 +5,7 @@ import {
   PairingProtocolError,
   createPairingState,
   disconnectPairingConnection,
+  expirePairingState,
   reducePairingMessage,
 } from "../core/pairing-state-machine.mjs";
 
@@ -15,6 +16,7 @@ const descriptor = Object.freeze({
   generation: 7,
   lease_id: "lease-a",
   pairing_nonce: "nonce-a",
+  expires_at: "2030-01-01T01:00:00.000Z",
 });
 
 function identity(connectionId) {
@@ -99,6 +101,7 @@ test("initial candidate loss revokes while resume loss keeps the old active conn
   const registered = reducePairingMessage(createPairingState(descriptor), register()).state;
   const revoked = disconnectPairingConnection(registered, "connection-a").state;
   assert.equal(revoked.phase, PAIRING_STATES.REVOKED);
+  assert.equal(revoked.nonceConsumed, true);
   assert.throws(() => reducePairingMessage(revoked, register()), PairingProtocolError);
 
   const active = activeState();
@@ -121,6 +124,52 @@ test("resume fences the old connection only after the new candidate acknowledges
   assert.deepEqual(resumed.effects, [{ type: "fence", connectionId: "connection-a" }]);
   assert.throws(() => reducePairingMessage(resumed.state, ping("connection-a")), PairingProtocolError);
   assert.equal(reducePairingMessage(resumed.state, ping("connection-b")).effects.length, 1);
+});
+
+test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {
+  const boundary = new Date(descriptor.expires_at);
+  const issued = expirePairingState(createPairingState(descriptor), boundary);
+  assert.equal(issued.state.phase, PAIRING_STATES.REVOKED);
+  assert.deepEqual(issued.effects, []);
+
+  const beforeExpiry = new Date("2030-01-01T00:00:00.000Z");
+  const pairingState = reducePairingMessage(createPairingState(descriptor), register(), { now: beforeExpiry }).state;
+  const pairing = expirePairingState(pairingState, boundary);
+  assert.equal(pairing.state.phase, PAIRING_STATES.REVOKED);
+  assert.deepEqual(pairing.effects, [{ type: "fence", connectionId: "connection-a" }]);
+
+  const active = reducePairingMessage(pairingState, ack(), { now: beforeExpiry }).state;
+  const activeExpiry = expirePairingState(active, boundary);
+  assert.equal(activeExpiry.state.phase, PAIRING_STATES.REVOKED);
+  assert.deepEqual(activeExpiry.effects, [{ type: "fence", connectionId: "connection-a" }]);
+  assert.throws(() => reducePairingMessage(activeExpiry.state, ping(), { now: boundary }), PairingProtocolError);
+});
+
+test("expiration fences both active and resume candidates without affecting another instance", () => {
+  const beforeExpiry = new Date("2030-01-01T00:00:00.000Z");
+  const aCandidate = reducePairingMessage(activeState(), resume(), { now: beforeExpiry }).state;
+  const aExpiry = expirePairingState(aCandidate, new Date(descriptor.expires_at));
+  assert.deepEqual(aExpiry.effects, [
+    { type: "fence", connectionId: "connection-a" },
+    { type: "fence", connectionId: "connection-b" },
+  ]);
+
+  const descriptorB = { ...descriptor, session_id: "session-b", browser_instance_id: "browser-b", profile_instance_id: "profile-b" };
+  const bIssued = createPairingState(descriptorB);
+  const bExpiry = expirePairingState(bIssued, new Date(descriptor.expires_at));
+  assert.equal(bExpiry.state.phase, PAIRING_STATES.REVOKED);
+  assert.equal(aCandidate.phase, PAIRING_STATES.ACTIVE);
+  assert.equal(aCandidate.activeConnectionId, "connection-a");
+});
+
+test("a host connection ID remains fenced after A then B then attempted A reuse", () => {
+  const active = activeState();
+  const resumed = reducePairingMessage(active, resume()).state;
+  const withB = reducePairingMessage(resumed, ack("connection-b")).state;
+  const disconnected = disconnectPairingConnection(withB, "connection-b").state;
+  assert.deepEqual(disconnected.usedConnectionIds, ["connection-a", "connection-b"]);
+  assert.throws(() => reducePairingMessage(disconnected, resume("connection-a")), PairingProtocolError);
+  assert.throws(() => reducePairingMessage(disconnected, resume("connection-b")), PairingProtocolError);
 });
 
 test("A and B are independent even when B fails before A starts", () => {

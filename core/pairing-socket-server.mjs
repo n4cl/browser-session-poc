@@ -5,6 +5,7 @@ import { validatePairingDescriptor, validateSocketPath } from "./pairing-descrip
 import {
   createPairingState,
   disconnectPairingConnection,
+  expirePairingState,
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
 
@@ -66,16 +67,35 @@ export class PairingSocketServer {
   #connections = new Map();
   #createdSocketIdentity = null;
   #state;
+  #clock;
+  #setTimer;
+  #clearTimer;
+  #expiryTimer = null;
 
-  constructor({ paths, descriptor, profileInstanceId, maxMessageBytes = PAIRING_SOCKET_MAX_MESSAGE_BYTES, now = new Date() }) {
+  constructor({
+    paths,
+    descriptor,
+    profileInstanceId,
+    maxMessageBytes = PAIRING_SOCKET_MAX_MESSAGE_BYTES,
+    now = new Date(),
+    clock = () => new Date(),
+    setTimer = setTimeout,
+    clearTimer = clearTimeout,
+  }) {
     if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0) {
       throw new TypeError("maxMessageBytes must be a positive safe integer");
+    }
+    if (typeof clock !== "function" || typeof setTimer !== "function" || typeof clearTimer !== "function") {
+      throw new TypeError("clock and timer functions are required");
     }
     validatePairingDescriptor(descriptor, { paths, profileInstanceId, now });
     this.#paths = paths;
     this.#descriptor = descriptor;
     this.#maxMessageBytes = maxMessageBytes;
     this.#state = createPairingState(descriptor);
+    this.#clock = clock;
+    this.#setTimer = setTimer;
+    this.#clearTimer = clearTimer;
   }
 
   get state() {
@@ -110,6 +130,7 @@ export class PairingSocketServer {
         throw new Error("pairing socket path changed during setup");
       }
       this.#server = server;
+      this.#scheduleExpiry();
     } catch (error) {
       await new Promise((resolve) => server.close(() => resolve()));
       await this.#removeOwnedSocket();
@@ -146,11 +167,12 @@ export class PairingSocketServer {
   }
 
   #handleMessage(connection, message) {
+    this.#expireIfDue();
     const declaredConnectionId = message?.host_connection_id;
     if (connection.connectionId !== null && declaredConnectionId !== connection.connectionId) {
       throw new Error("transport connection does not match its pairing connection");
     }
-    const { state, effects } = reducePairingMessage(this.#state, message);
+    const { state, effects } = reducePairingMessage(this.#state, message, { now: this.#clock() });
     if (connection.connectionId === null) {
       if (typeof declaredConnectionId !== "string" || this.#connections.has(declaredConnectionId)) {
         throw new Error("pairing connection id is unavailable");
@@ -176,6 +198,39 @@ export class PairingSocketServer {
     }
   }
 
+  #expireIfDue() {
+    const transition = expirePairingState(this.#state, this.#clock());
+    this.#state = transition.state;
+    this.#applyEffects(transition.effects);
+    return this.#state.phase === "REVOKED";
+  }
+
+  #scheduleExpiry() {
+    const now = this.#clock();
+    if (!(now instanceof Date) || !Number.isFinite(now.valueOf())) {
+      throw new TypeError("clock must return a valid Date");
+    }
+    const delay = Date.parse(this.#descriptor.expires_at) - now.valueOf();
+    if (delay <= 0) {
+      this.#expireIfDue();
+      return;
+    }
+    const maximumDelay = 0x7fffffff;
+    this.#expiryTimer = this.#setTimer(() => {
+      this.#expiryTimer = null;
+      if (!this.#expireIfDue()) {
+        this.#scheduleExpiry();
+      }
+    }, Math.min(delay, maximumDelay));
+  }
+
+  #cancelExpiryTimer() {
+    if (this.#expiryTimer !== null) {
+      this.#clearTimer(this.#expiryTimer);
+      this.#expiryTimer = null;
+    }
+  }
+
   async #removeOwnedSocket() {
     if (this.#createdSocketIdentity === null) return;
     const current = await lstatOrNull(this.#descriptor.socket_path);
@@ -187,6 +242,7 @@ export class PairingSocketServer {
   }
 
   async close() {
+    this.#cancelExpiryTimer();
     for (const connection of this.#sockets) {
       connection.socket.destroy();
     }
