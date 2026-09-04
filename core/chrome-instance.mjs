@@ -200,8 +200,9 @@ export async function recoverStaleChrome({
     throw new Error("refusing to recover state without a valid recorded Chrome PID");
   }
 
-  if (readIdentity(state.chrome_pid) !== null) {
-    throw new Error("refusing to recover: recorded Chrome PID is still assigned");
+  const recordedIdentity = readIdentity(state.chrome_pid);
+  if (processMatchesState({ state, identity: recordedIdentity })) {
+    throw new Error("refusing to recover: recorded Chrome instance is still running");
   }
 
   const matchingProcess = listIdentities().find((identity) =>

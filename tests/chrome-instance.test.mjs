@@ -145,7 +145,7 @@ test("process list parser preserves PID and macOS single-digit day output", () =
   assert.throws(() => parseProcessIdentities("not ps output"), /unable to parse/);
 });
 
-test("stale Chrome recovery releases a claim only after no matching process is found", async () => {
+test("stale Chrome recovery allows a reused recorded PID after no matching process is found", async () => {
   const state = {
     chrome_executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     chrome_pid: 42,
@@ -159,8 +159,17 @@ test("stale Chrome recovery releases a claim only after no matching process is f
     state,
     statePath: "/tmp/state.json",
     claimPath: "/tmp/a.claim",
-    readIdentity: () => null,
-    listIdentities: () => [],
+    readIdentity: () => ({
+      processStart: "Fri Sep  5 12:00:00 2026",
+      command: "/usr/bin/unrelated-process",
+    }),
+    listIdentities: () => [
+      {
+        pid: state.chrome_pid,
+        processStart: "Fri Sep  5 12:00:00 2026",
+        command: "/usr/bin/unrelated-process",
+      },
+    ],
     writeState: async (statePath, value) => calls.push({ type: "state", statePath, value }),
     releaseClaim: async (claimPath) => calls.push({ type: "claim", claimPath }),
     now: () => "2026-09-04T12:00:00.000Z",
@@ -177,7 +186,7 @@ test("stale Chrome recovery releases a claim only after no matching process is f
   ]);
 });
 
-test("stale Chrome recovery fails closed for an assigned PID or matching profile process", async () => {
+test("stale Chrome recovery fails closed while the recorded Chrome instance is still running", async () => {
   const state = {
     chrome_executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     chrome_pid: 42,
@@ -201,19 +210,36 @@ test("stale Chrome recovery fails closed for an assigned PID or matching profile
       recoverStaleChrome({
         state,
         ...noChange,
-        readIdentity: () => ({ processStart: "Fri Sep  5 12:00:00 2026", command: "/usr/bin/other" }),
+        readIdentity: () => ({
+          processStart: state.process_start,
+          command: `${state.chrome_executable} --user-data-dir=${state.user_data_dir}`,
+        }),
         listIdentities: () => [],
       }),
-    /recorded Chrome PID is still assigned/,
+    /recorded Chrome instance is still running/,
   );
   assert.equal(changed, false);
+});
+
+test("stale Chrome recovery fails closed for another process using the recorded profile", async () => {
+  const state = {
+    chrome_executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chrome_pid: 42,
+    process_start: "Thu Sep  4 12:00:00 2026",
+    user_data_dir: "/tmp/browser-poc/profiles/a",
+  };
+  let changed = false;
 
   await assert.rejects(
     () =>
       recoverStaleChrome({
         state,
-        ...noChange,
-        readIdentity: () => null,
+        statePath: "/tmp/state.json",
+        claimPath: "/tmp/a.claim",
+        readIdentity: () => ({
+          processStart: "Fri Sep  5 12:00:00 2026",
+          command: "/usr/bin/unrelated-process",
+        }),
         listIdentities: () => [
           {
             pid: 99,
@@ -221,6 +247,12 @@ test("stale Chrome recovery fails closed for an assigned PID or matching profile
             command: `${state.chrome_executable} --new-window --user-data-dir=${state.user_data_dir}`,
           },
         ],
+        writeState: async () => {
+          changed = true;
+        },
+        releaseClaim: async () => {
+          changed = true;
+        },
       }),
     /still uses the recorded user data directory/,
   );
