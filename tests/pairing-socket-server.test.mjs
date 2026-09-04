@@ -96,6 +96,7 @@ async function activateHostToSessionSocket(client, descriptor, connectionId = "c
   const challenge = await client.next();
   assert.equal(challenge.type, "pair_challenge");
   client.send(encodeNativeMessage(message(descriptor, "pair_ack", connectionId)));
+  assert.equal((await client.next()).type, "pair_active");
 }
 
 test("native host-to-session socket transport accepts partial and multiple frames", async (t) => {
@@ -118,6 +119,7 @@ test("native host-to-session socket transport accepts partial and multiple frame
   const acknowledgement = encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-a"));
   const ping = encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-a", { request_id: "request-a" }));
   client.send(Buffer.concat([acknowledgement, ping]));
+  assert.equal((await client.next()).type, "pair_active");
   const response = await client.next();
   assert.deepEqual(response, message(fixture.descriptor, "ping_response", "connection-a", { request_id: "request-a" }));
 
@@ -128,6 +130,7 @@ test("native host-to-session socket transport accepts partial and multiple frame
   assert.equal((await resumeClient.next()).pairing_mode, "resume");
   resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-b")));
   await oldConnectionClosed;
+  assert.equal((await resumeClient.next()).type, "pair_active");
   resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-b", { request_id: "request-b" })));
   assert.equal((await resumeClient.next()).request_id, "request-b");
 });

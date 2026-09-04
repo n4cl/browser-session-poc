@@ -1,4 +1,6 @@
-export const PAIRING_PROTOCOL_VERSION = 1;
+import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
+
+export { PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
 
 export const PAIRING_STATES = Object.freeze({
   ISSUED: "ISSUED",
@@ -7,13 +9,7 @@ export const PAIRING_STATES = Object.freeze({
   REVOKED: "REVOKED",
 });
 
-const IDENTITY_FIELDS = [
-  "session_id",
-  "browser_instance_id",
-  "profile_instance_id",
-  "generation",
-  "lease_id",
-];
+const IDENTITY_FIELDS = PAIRING_IDENTITY_FIELDS;
 
 export class PairingProtocolError extends Error {
   constructor(message = "pairing protocol violation") {
@@ -71,6 +67,13 @@ function withChallenge(binding, hostConnectionId, mode) {
     type: "pair_challenge",
     ...identityMessage(binding, hostConnectionId),
     pairing_mode: mode,
+  };
+}
+
+function withActive(binding, hostConnectionId) {
+  return {
+    type: "pair_active",
+    ...identityMessage(binding, hostConnectionId),
   };
 }
 
@@ -205,7 +208,10 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
       assertAckMessage(message, binding, state.candidateConnectionId);
       const oldConnectionId = state.activeConnectionId;
       const connectionId = state.candidateConnectionId;
-      const effects = oldConnectionId === null ? [] : [{ type: "fence", connectionId: oldConnectionId }];
+      const effects = [{ type: "send", connectionId, message: withActive(binding, connectionId) }];
+      if (oldConnectionId !== null) {
+        effects.push({ type: "fence", connectionId: oldConnectionId });
+      }
       return next(state, {
         phase: PAIRING_STATES.ACTIVE,
         activeConnectionId: connectionId,

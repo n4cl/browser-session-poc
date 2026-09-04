@@ -8,8 +8,9 @@ import {
   expirePairingState,
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
+import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
-export const PAIRING_SOCKET_MAX_MESSAGE_BYTES = 64 * 1024;
+export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
 function modeOf(stat) {
   return stat.mode & 0o777;

@@ -121,7 +121,14 @@ test("resume fences the old connection only after the new candidate acknowledges
 
   const resumed = reducePairingMessage(candidate.state, ack("connection-b"));
   assert.equal(resumed.state.activeConnectionId, "connection-b");
-  assert.deepEqual(resumed.effects, [{ type: "fence", connectionId: "connection-a" }]);
+  assert.deepEqual(resumed.effects, [
+    {
+      type: "send",
+      connectionId: "connection-b",
+      message: { type: "pair_active", ...identity("connection-b") },
+    },
+    { type: "fence", connectionId: "connection-a" },
+  ]);
   assert.throws(() => reducePairingMessage(resumed.state, ping("connection-a")), PairingProtocolError);
   assert.equal(reducePairingMessage(resumed.state, ping("connection-b")).effects.length, 1);
 });

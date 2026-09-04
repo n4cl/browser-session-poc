@@ -42,6 +42,8 @@ npm run native-host -- uninstall poc-gate1
 
 `install`が生成するwrapperは、固定されたruntime rootとinstance-idをHostへ引数で渡す。Hostはそのinstanceのprofile metadataとactive descriptorだけを0600・非symlink・期限の条件で再検証し、descriptorが指定したsession socketだけへ接続する。他instanceの探索やGate 1への自動fallbackはしない。
 
+Extensionの`storage` permissionは、`pair_active`で確定したbinding（session/browser/profile/generation/lease）だけを保存し、次回に同じinstanceへ`resume_start`するために使う。challengeやnonceは保存しない。
+
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 
-現時点のExtensionはまだGate 2 protocolを送らないため、このwrapperを導入した実機のend-to-end検証は次のExtension実装単位まで保留する。Gate 1の実機結果は過去の確認記録として保持している。
+ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。明示的なrotation/resetは後続のsession harness実装で扱う。Gate 1の実機結果は過去の確認記録として保持している。

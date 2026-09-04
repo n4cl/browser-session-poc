@@ -3,6 +3,7 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
 import test from "node:test";
 import { extensionIdFromPublicKey, GATE_1_EXTENSION_ID, GATE_1_EXTENSION_ORIGIN } from "../core/extension-id.mjs";
 import {
@@ -20,6 +21,7 @@ import {
 } from "../native-host/codec.mjs";
 import {
   parseNativeHostArguments,
+  connectPairingSocket,
   runNativeHost,
   runPairingNativeHost,
 } from "../native-host/host.mjs";
@@ -31,6 +33,7 @@ import {
   writeActivePairingDescriptor,
 } from "../core/pairing-descriptor.mjs";
 import { PairingSocketServer } from "../core/pairing-socket-server.mjs";
+import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "../core/pairing-protocol.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
 
@@ -86,13 +89,21 @@ async function pairingFixture(instanceId = "poc-a") {
 function bridgeFor(challenge) {
   const sent = [];
   let closed = false;
+  const messages = challenge.messages ?? [
+    challenge.message,
+    Object.fromEntries(Object.entries({ ...challenge.message, type: "pair_active" }).filter(([key]) => key !== "pairing_mode")),
+  ];
   return {
     sent,
     async connector({ socketPath }) {
       assert.equal(socketPath, challenge.socket_path);
       return {
         send(message) { sent.push(message); },
-        async receive() { return challenge.message; },
+        async receive() {
+          const message = messages.shift();
+          if (!message) throw new Error("no bridge response");
+          return message;
+        },
         close() { closed = true; },
       };
     },
@@ -103,14 +114,14 @@ function bridgeFor(challenge) {
 test("manifest public key derives the fixed unpacked extension ID", async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "extension", "manifest.json"), "utf8"));
   assert.equal(extensionIdFromPublicKey(manifest.key), GATE_1_EXTENSION_ID);
-  assert.deepEqual(manifest.permissions, ["nativeMessaging"]);
+  assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage"]);
   assert.equal(manifest.permissions.includes("debugger"), false);
   assert.equal(manifest.host_permissions, undefined);
   const background = await readFile(path.join(repositoryRoot, "extension", "background.mjs"), "utf8");
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
-  assert.match(background, /chrome\.runtime\.connectNative/);
-  assert.match(background, /chrome\.runtime\.lastError\?\.message/);
-  assert.match(background, /console\.error\("Native Messaging connection closed:", errorMessage\)/);
+  assert.match(background, /chromeApi\.runtime\.connectNative/);
+  assert.match(background, /chromeApi\.runtime\.lastError\?\.message/);
+  assert.match(background, /createPairingController/);
 });
 
 test("Native Messaging codec handles partial and multiple frames", () => {
@@ -140,6 +151,28 @@ test("Native Messaging codec rejects invalid JSON and oversize frames", () => {
   );
   assert.equal(MAX_EXTENSION_TO_HOST_BYTES, 64 * 1024 * 1024);
   assert.equal(MAX_HOST_TO_EXTENSION_BYTES, 1 * 1024 * 1024);
+});
+
+test("Native Host session socket connector enforces the shared 64 KiB framing limit", async () => {
+  class FakeSocket extends EventEmitter {
+    writes = [];
+    destroyed = false;
+    write(frame) {
+      this.writes.push(frame);
+      return true;
+    }
+    destroy() { this.destroyed = true; }
+  }
+  const socket = new FakeSocket();
+  const connecting = connectPairingSocket({ socketPath: "/tmp/unused.sock", socketFactory: () => socket });
+  socket.emit("connect");
+  const connector = await connecting;
+  assert.equal(PAIRING_SOCKET_MAX_MESSAGE_BYTES, 64 * 1024);
+  assert.throws(() => connector.send({ payload: "x".repeat(PAIRING_SOCKET_MAX_MESSAGE_BYTES + 1) }), /exceeds/);
+  const oversized = Buffer.alloc(4);
+  oversized.writeUInt32LE(PAIRING_SOCKET_MAX_MESSAGE_BYTES + 1);
+  socket.emit("data", oversized);
+  assert.equal(socket.destroyed, true);
 });
 
 test("Native Host completes exact-origin hello and ack without stdout diagnostics", async () => {
@@ -242,7 +275,13 @@ test("pairing Native Host bridges partial initial frames through one descriptor-
     },
     { type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) },
   ]);
-  assert.deepEqual(new NativeMessageDecoder().push(outputBytes()), [challenge.message]);
+  assert.deepEqual(new NativeMessageDecoder().push(outputBytes()), [
+    challenge.message,
+    {
+      type: "pair_active",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+    },
+  ]);
   assert.equal(diagnostics().length, 0);
   assert.equal(bridge.closed, true);
 });

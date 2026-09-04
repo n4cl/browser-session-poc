@@ -3,7 +3,7 @@
   "name": "Browser Session PoC Gate 1",
   "version": "0.0.1",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA112EaDNWvWMKy9T1y4WbH+eN1WePKF8owR4ipgCVvN1BP7Msbt+vPlVkv87KrGEdhfYmmGY8Rhazck7FlMKdcYqhiXnNy1j6BYUYSAJjUtsqrMmFEj+vkgNstjMdctfOu9au6SbG84HVw0CaSs5uwlUl9FYSG/8gGgL12z90HzF+M9sPSkZS+RYZ8K2cj3f97jKD2OubnpYxmgg6o88eOu71/skjDPle0a48wMEohiXIDPBAzRXwwrmTCkbq7At/fsLpLG+yvgQSbhYcBDGBBOzObOiSl4YRUbf//Offhu0M3I3rB+5XsU/BK/FomyPo2U1lTmTRlpwY3faH4S8FVwIDAQAB",
-  "permissions": ["nativeMessaging"],
+  "permissions": ["nativeMessaging", "storage"],
   "background": {
     "service_worker": "background.mjs",
     "type": "module"

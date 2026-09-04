@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
 import { GATE_1_EXTENSION_ORIGIN } from "../core/extension-id.mjs";
+import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION, PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "../core/pairing-protocol.mjs";
 import {
   readActivePairingDescriptor,
   readProfileMetadata,
@@ -20,15 +21,7 @@ import {
 
 export const GATE_1_NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
 export const GATE_1_PROTOCOL_VERSION = 1;
-export const PAIRING_PROTOCOL_VERSION = 1;
-
-const PAIRING_IDENTITY_FIELDS = [
-  "session_id",
-  "browser_instance_id",
-  "profile_instance_id",
-  "generation",
-  "lease_id",
-];
+export { PAIRING_PROTOCOL_VERSION } from "../core/pairing-protocol.mjs";
 
 function runtimeRoot() {
   return process.env.BROWSER_POC_RUNTIME_ROOT
@@ -138,6 +131,14 @@ function assertPairChallenge(message, descriptor, hostConnectionId, pairingMode)
   assertIdentity(message, descriptor, hostConnectionId);
 }
 
+function assertPairActive(message, descriptor, hostConnectionId) {
+  assertExactFields(message, ["type", "protocol_version", ...PAIRING_IDENTITY_FIELDS, "host_connection_id"]);
+  if (message.type !== "pair_active") {
+    throw new Error("invalid pairing activation");
+  }
+  assertIdentity(message, descriptor, hostConnectionId);
+}
+
 function nativeWrite(output, message) {
   output.write(encodeNativeMessage(message, { maxBytes: MAX_HOST_TO_EXTENSION_BYTES }));
 }
@@ -158,7 +159,7 @@ export async function connectPairingSocket({ socketPath, socketFactory = (target
     throw new Error("unable to connect to pairing socket");
   }
 
-  const decoder = new NativeMessageDecoder({ maxBytes: MAX_EXTENSION_TO_HOST_BYTES });
+  const decoder = new NativeMessageDecoder({ maxBytes: PAIRING_SOCKET_MAX_MESSAGE_BYTES });
   const messages = [];
   const waiters = [];
   let closed = false;
@@ -189,7 +190,7 @@ export async function connectPairingSocket({ socketPath, socketFactory = (target
   });
   return {
     send(message) {
-      if (closed || !socket.write(encodeNativeMessage(message, { maxBytes: MAX_EXTENSION_TO_HOST_BYTES }))) {
+      if (closed || !socket.write(encodeNativeMessage(message, { maxBytes: PAIRING_SOCKET_MAX_MESSAGE_BYTES }))) {
         if (closed) throw new Error("pairing socket closed");
       }
     },
@@ -268,6 +269,9 @@ export async function runPairingNativeHost({
         } else if (phase === "AWAIT_ACK") {
           assertPairAck(message, descriptor, hostConnectionId);
           bridge.send(message);
+          const active = await bridge.receive();
+          assertPairActive(active, descriptor, hostConnectionId);
+          nativeWrite(output, active);
           phase = "ACTIVE";
         } else {
           throw new Error("unexpected pairing protocol message");
