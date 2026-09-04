@@ -6,6 +6,7 @@ import {
   createPairingState,
   disconnectPairingConnection,
   expirePairingState,
+  issuePairingPing,
   reducePairingMessage,
 } from "../core/pairing-state-machine.mjs";
 
@@ -44,7 +45,7 @@ function resume(connectionId = "connection-b") {
 }
 
 function ping(connectionId = "connection-a", requestId = "request-a") {
-  return { type: "ping_request", ...identity(connectionId), request_id: requestId };
+  return { type: "transport_probe_request", ...identity(connectionId), request_id: requestId };
 }
 
 function activeState() {
@@ -68,7 +69,7 @@ test("initial pairing consumes the nonce, then allows only the acknowledged conn
   const roundtrip = reducePairingMessage(active, ping());
   assert.equal(roundtrip.effects.length, 1);
   assert.deepEqual(roundtrip.effects[0].message, {
-    type: "ping_response",
+    type: "transport_probe_response",
     ...identity("connection-a"),
     request_id: "request-a",
   });
@@ -131,6 +132,17 @@ test("resume fences the old connection only after the new candidate acknowledges
   ]);
   assert.throws(() => reducePairingMessage(resumed.state, ping("connection-a")), PairingProtocolError);
   assert.equal(reducePairingMessage(resumed.state, ping("connection-b")).effects.length, 1);
+});
+
+test("issued pairing pings resolve only for the active identity and pending request", () => {
+  const issued = issuePairingPing(activeState(), { requestId: "request-ping" });
+  assert.equal(issued.state.pendingRequestIds.length, 1);
+  assert.equal(issued.effects[0].message.type, "ping_request");
+  assert.throws(() => issuePairingPing(issued.state, { requestId: "request-ping" }), PairingProtocolError);
+  assert.throws(() => reducePairingMessage(issued.state, { ...issued.effects[0].message, type: "ping_response", request_id: "wrong" }), PairingProtocolError);
+  const resolved = reducePairingMessage(issued.state, { ...issued.effects[0].message, type: "ping_response" });
+  assert.deepEqual(resolved.state.pendingRequestIds, []);
+  assert.deepEqual(resolved.effects, [{ type: "ping_resolved", requestId: "request-ping" }]);
 });
 
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {

@@ -113,6 +113,9 @@ test("initial pairing does not persist before pair_active and persists only the 
   await settle();
   assert.deepEqual(chrome.setCalls, [{ pairing_binding: binding }]);
   assert.equal(controller.getState().phase, "ACTIVE");
+  port.emitMessage({ type: "ping_request", request_id: "request-a", ...identity() });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), { type: "ping_response", request_id: "request-a", ...identity() });
 });
 
 test("resume preserves its stored binding and malformed pair_active disconnects without saving", async () => {

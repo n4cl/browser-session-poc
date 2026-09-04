@@ -4,6 +4,7 @@ import {
   validateBinding,
   validatePairActive,
   validatePairChallenge,
+  respondToPing,
 } from "./pairing-protocol.mjs";
 
 const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
@@ -89,6 +90,8 @@ export function createPairingController({
         challenge = null;
         phase = "ACTIVE";
         retryAttempt = 0;
+      } else if (phase === "ACTIVE") {
+        target.postMessage(respondToPing(message, binding));
       } else {
         throw new Error("unexpected pairing message");
       }

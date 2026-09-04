@@ -117,11 +117,11 @@ test("native host-to-session socket transport accepts partial and multiple frame
   assert.equal(challenge.type, "pair_challenge");
 
   const acknowledgement = encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-a"));
-  const ping = encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-a", { request_id: "request-a" }));
+  const ping = encodeNativeMessage(message(fixture.descriptor, "transport_probe_request", "connection-a", { request_id: "request-a" }));
   client.send(Buffer.concat([acknowledgement, ping]));
   assert.equal((await client.next()).type, "pair_active");
   const response = await client.next();
-  assert.deepEqual(response, message(fixture.descriptor, "ping_response", "connection-a", { request_id: "request-a" }));
+  assert.deepEqual(response, message(fixture.descriptor, "transport_probe_response", "connection-a", { request_id: "request-a" }));
 
   const resumeClient = await framedClient(fixture.descriptor.socket_path);
   t.after(() => resumeClient.socket.destroy());
@@ -131,8 +131,13 @@ test("native host-to-session socket transport accepts partial and multiple frame
   resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-b")));
   await oldConnectionClosed;
   assert.equal((await resumeClient.next()).type, "pair_active");
-  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "ping_request", "connection-b", { request_id: "request-b" })));
+  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "transport_probe_request", "connection-b", { request_id: "request-b" })));
   assert.equal((await resumeClient.next()).request_id, "request-b");
+  const harnessPing = fixture.server.requestPing({ requestId: "harness-ping", timeoutMs: 1_000 });
+  const request = await resumeClient.next();
+  assert.equal(request.type, "ping_request");
+  resumeClient.send(encodeNativeMessage(message(fixture.descriptor, "ping_response", "connection-b", { request_id: "harness-ping" })));
+  assert.deepEqual(await harnessPing, { requestId: "harness-ping" });
 });
 
 test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {
@@ -187,7 +192,7 @@ test("A and B sockets remain independent when B fails before A starts", async (t
   await bClosed;
   assert.equal(b.server.state.phase, "ISSUED");
 
-  aClient.send(encodeNativeMessage(message(a.descriptor, "ping_request", "connection-a", { request_id: "a-still-active" })));
+  aClient.send(encodeNativeMessage(message(a.descriptor, "transport_probe_request", "connection-a", { request_id: "a-still-active" })));
   assert.equal((await aClient.next()).request_id, "a-still-active");
 });
 

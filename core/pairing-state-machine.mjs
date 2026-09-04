@@ -166,6 +166,7 @@ export function createPairingState(descriptor) {
     candidateConnectionId: null,
     candidateKind: null,
     usedConnectionIds: [],
+    pendingRequestIds: [],
     expiresAt: Date.parse(descriptor.expires_at),
   };
 }
@@ -237,16 +238,25 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         usedConnectionIds: [...state.usedConnectionIds, connectionId],
       }, [{ type: "send", connectionId, message: withChallenge(binding, connectionId, "resume") }]);
     }
-    case "ping_request": {
+    case "ping_response": {
+      if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) fail("ping is not permitted in the current state");
+      assertExactFields(message, ["type", "request_id", ...IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+      assertMessageIdentity(message, binding, { connectionId: state.activeConnectionId });
+      if (!isNonEmptyString(message.request_id) || !state.pendingRequestIds.includes(message.request_id)) fail("ping response is not pending");
+      return next(state, { pendingRequestIds: state.pendingRequestIds.filter((id) => id !== message.request_id) }, [
+        { type: "ping_resolved", requestId: message.request_id },
+      ]);
+    }
+    case "transport_probe_request": {
       if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
         fail("ping is not permitted in the current state");
       }
-      assertPingMessage(message, binding, state.activeConnectionId);
+      assertPingMessage({ ...message, type: "ping_request" }, binding, state.activeConnectionId);
       return next(state, {}, [{
         type: "send",
         connectionId: state.activeConnectionId,
         message: {
-          type: "ping_response",
+          type: "transport_probe_response",
           ...identityMessage(binding, state.activeConnectionId),
           request_id: message.request_id,
         },
@@ -255,6 +265,25 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
     default:
       fail("message type is not permitted");
   }
+}
+
+export function issuePairingPing(state, { requestId }) {
+  if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !isNonEmptyString(requestId)) {
+    fail("ping is not permitted in the current state");
+  }
+  if (state.pendingRequestIds.includes(requestId)) fail("ping request id is already pending");
+  return next(state, { pendingRequestIds: [...state.pendingRequestIds, requestId] }, [{
+    type: "send",
+    connectionId: state.activeConnectionId,
+    message: { type: "ping_request", ...identityMessage(state.binding, state.activeConnectionId), request_id: requestId },
+  }]);
+}
+
+export function cancelPairingPing(state, requestId) {
+  if (!state.pendingRequestIds.includes(requestId)) return next(state, {});
+  return next(state, { pendingRequestIds: state.pendingRequestIds.filter((id) => id !== requestId) }, [
+    { type: "ping_rejected", requestId },
+  ]);
 }
 
 /**

@@ -139,6 +139,12 @@ function assertPairActive(message, descriptor, hostConnectionId) {
   assertIdentity(message, descriptor, hostConnectionId);
 }
 
+function assertPing(message, descriptor, hostConnectionId, type) {
+  assertExactFields(message, ["type", "request_id", "protocol_version", ...PAIRING_IDENTITY_FIELDS, "host_connection_id"]);
+  if (message.type !== type || !isNonEmptyString(message.request_id)) throw new Error("invalid pairing ping");
+  assertIdentity(message, descriptor, hostConnectionId);
+}
+
 function nativeWrite(output, message) {
   output.write(encodeNativeMessage(message, { maxBytes: MAX_HOST_TO_EXTENSION_BYTES }));
 }
@@ -273,6 +279,20 @@ export async function runPairingNativeHost({
           assertPairActive(active, descriptor, hostConnectionId);
           nativeWrite(output, active);
           phase = "ACTIVE";
+          void (async () => {
+            try {
+              while (phase === "ACTIVE") {
+                const request = await bridge.receive();
+                assertPing(request, descriptor, hostConnectionId, "ping_request");
+                nativeWrite(output, request);
+              }
+            } catch {
+              // Socket closure ends the pump; stdin EOF owns Native Host process completion.
+            }
+          })();
+        } else if (phase === "ACTIVE") {
+          assertPing(message, descriptor, hostConnectionId, "ping_response");
+          bridge.send(message);
         } else {
           throw new Error("unexpected pairing protocol message");
         }

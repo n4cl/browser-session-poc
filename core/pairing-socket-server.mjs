@@ -6,6 +6,8 @@ import {
   createPairingState,
   disconnectPairingConnection,
   expirePairingState,
+  issuePairingPing,
+  cancelPairingPing,
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
 import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
@@ -72,6 +74,7 @@ export class PairingSocketServer {
   #setTimer;
   #clearTimer;
   #expiryTimer = null;
+  #pendingPings = new Map();
 
   constructor({
     paths,
@@ -101,6 +104,21 @@ export class PairingSocketServer {
 
   get state() {
     return this.#state;
+  }
+
+  requestPing({ requestId, timeoutMs = 1_000 }) {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new TypeError("timeoutMs must be positive");
+    const transition = issuePairingPing(this.#state, { requestId });
+    this.#state = transition.state;
+    return new Promise((resolve, reject) => {
+      const timer = this.#setTimer(() => {
+        const cancelled = cancelPairingPing(this.#state, requestId);
+        this.#state = cancelled.state;
+        this.#applyEffects(cancelled.effects);
+      }, timeoutMs);
+      this.#pendingPings.set(requestId, { resolve, reject, timer });
+      this.#applyEffects(transition.effects);
+    });
   }
 
   async listen() {
@@ -150,7 +168,15 @@ export class PairingSocketServer {
       this.#sockets.delete(connection);
       if (connection.connectionId !== null && this.#connections.get(connection.connectionId) === connection) {
         this.#connections.delete(connection.connectionId);
+        const wasActive = this.#state.activeConnectionId === connection.connectionId;
         this.#state = disconnectPairingConnection(this.#state, connection.connectionId).state;
+        if (wasActive) {
+          for (const requestId of [...this.#state.pendingRequestIds]) {
+            const cancelled = cancelPairingPing(this.#state, requestId);
+            this.#state = cancelled.state;
+            this.#applyEffects(cancelled.effects);
+          }
+        }
       }
     };
     socket.on("close", disconnect);
@@ -187,6 +213,16 @@ export class PairingSocketServer {
 
   #applyEffects(effects) {
     for (const effect of effects) {
+      if (effect.type === "ping_resolved" || effect.type === "ping_rejected") {
+        const pending = this.#pendingPings.get(effect.requestId);
+        if (pending) {
+          this.#pendingPings.delete(effect.requestId);
+          this.#clearTimer(pending.timer);
+          if (effect.type === "ping_resolved") pending.resolve({ requestId: effect.requestId });
+          else pending.reject(new Error("pairing ping was not completed"));
+        }
+        continue;
+      }
       const connection = this.#connections.get(effect.connectionId);
       if (!connection) {
         continue;
@@ -203,6 +239,13 @@ export class PairingSocketServer {
     const transition = expirePairingState(this.#state, this.#clock());
     this.#state = transition.state;
     this.#applyEffects(transition.effects);
+    if (this.#state.phase === "REVOKED") {
+      for (const requestId of [...this.#state.pendingRequestIds]) {
+        const cancelled = cancelPairingPing(this.#state, requestId);
+        this.#state = cancelled.state;
+        this.#applyEffects(cancelled.effects);
+      }
+    }
     return this.#state.phase === "REVOKED";
   }
 
@@ -244,6 +287,11 @@ export class PairingSocketServer {
 
   async close() {
     this.#cancelExpiryTimer();
+    for (const [requestId, pending] of this.#pendingPings) {
+      this.#pendingPings.delete(requestId);
+      this.#clearTimer(pending.timer);
+      pending.reject(new Error("pairing socket server closed"));
+    }
     for (const connection of this.#sockets) {
       connection.socket.destroy();
     }
