@@ -93,18 +93,28 @@ function bridgeFor(challenge) {
     challenge.message,
     Object.fromEntries(Object.entries({ ...challenge.message, type: "pair_active" }).filter(([key]) => key !== "pairing_mode")),
   ];
+  const waiters = [];
+  const receive = () => {
+    if (messages.length > 0) return Promise.resolve(messages.shift());
+    return new Promise((resolve, reject) => waiters.push({ resolve, reject }));
+  };
+  const fail = () => {
+    while (waiters.length > 0) waiters.shift().reject(new Error("bridge closed"));
+  };
   return {
     sent,
+    push(message) {
+      const waiter = waiters.shift();
+      if (waiter) waiter.resolve(message);
+      else messages.push(message);
+    },
+    fail,
     async connector({ socketPath }) {
       assert.equal(socketPath, challenge.socket_path);
       return {
         send(message) { sent.push(message); },
-        async receive() {
-          const message = messages.shift();
-          if (!message) throw new Error("no bridge response");
-          return message;
-        },
-        close() { closed = true; },
+        receive,
+        close() { closed = true; fail(); },
       };
     },
     get closed() { return closed; },

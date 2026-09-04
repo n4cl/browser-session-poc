@@ -287,7 +287,7 @@ export async function runPairingNativeHost({
                 nativeWrite(output, request);
               }
             } catch {
-              // Socket closure ends the pump; stdin EOF owns Native Host process completion.
+              if (!input.readableEnded) input.destroy(new Error("pairing socket closed"));
             }
           })();
         } else if (phase === "ACTIVE") {

@@ -211,6 +211,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
       const connectionId = state.candidateConnectionId;
       const effects = [{ type: "send", connectionId, message: withActive(binding, connectionId) }];
       if (oldConnectionId !== null) {
+        for (const requestId of state.pendingRequestIds) effects.push({ type: "ping_rejected", requestId });
         effects.push({ type: "fence", connectionId: oldConnectionId });
       }
       return next(state, {
@@ -218,6 +219,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         activeConnectionId: connectionId,
         candidateConnectionId: null,
         candidateKind: null,
+        pendingRequestIds: oldConnectionId === null ? state.pendingRequestIds : [],
       }, effects);
     }
     case "resume": {

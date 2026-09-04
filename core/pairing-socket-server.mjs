@@ -108,6 +108,7 @@ export class PairingSocketServer {
 
   requestPing({ requestId, timeoutMs = 1_000 }) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw new TypeError("timeoutMs must be positive");
+    this.#expireIfDue();
     const transition = issuePairingPing(this.#state, { requestId });
     this.#state = transition.state;
     return new Promise((resolve, reject) => {

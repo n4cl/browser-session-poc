@@ -34,6 +34,7 @@ export function createPairingController({
   let phase = "IDLE";
   let binding = null;
   let challenge = null;
+  let activeConnectionId = null;
 
   const clearRetry = () => {
     if (retryTimer !== null) {
@@ -57,6 +58,7 @@ export function createPairingController({
     port = undefined;
     phase = "IDLE";
     challenge = null;
+    activeConnectionId = null;
     target.disconnect();
     scheduleReconnect();
   };
@@ -70,6 +72,7 @@ export function createPairingController({
     port = undefined;
     phase = "IDLE";
     challenge = null;
+    activeConnectionId = null;
     scheduleReconnect();
   };
 
@@ -87,11 +90,12 @@ export function createPairingController({
         }
         if (port !== target) return;
         binding = activeBinding;
+        activeConnectionId = challenge.hostConnectionId;
         challenge = null;
         phase = "ACTIVE";
         retryAttempt = 0;
       } else if (phase === "ACTIVE") {
-        target.postMessage(respondToPing(message, binding));
+        target.postMessage(respondToPing(message, binding, activeConnectionId));
       } else {
         throw new Error("unexpected pairing message");
       }
@@ -136,6 +140,7 @@ export function createPairingController({
       port = undefined;
       phase = "IDLE";
       challenge = null;
+      activeConnectionId = null;
       target?.disconnect();
     },
     getState() {

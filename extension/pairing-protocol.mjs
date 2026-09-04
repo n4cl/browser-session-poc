@@ -97,10 +97,11 @@ export function validatePairActive(message, challenge) {
   return identityOf(message);
 }
 
-export function respondToPing(message, binding) {
+export function respondToPing(message, binding, hostConnectionId) {
   exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id"]);
   if (message.type !== "ping_request" || message.protocol_version !== PAIRING_PROTOCOL_VERSION || !nonEmptyString(message.request_id)) fail();
   validateIdentity(message, binding);
   validateConnectionId(message.host_connection_id);
+  if (message.host_connection_id !== hostConnectionId) fail();
   return { type: "ping_response", request_id: message.request_id, protocol_version: PAIRING_PROTOCOL_VERSION, ...binding, host_connection_id: message.host_connection_id };
 }
