@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { GATE_1_EXTENSION_ORIGIN } from "./extension-id.mjs";
+import { resolveInstancePaths } from "./chrome-instance.mjs";
 import { GATE_1_NATIVE_HOST_NAME } from "../native-host/host.mjs";
 
 function requireAbsolutePath(value, label) {
@@ -14,17 +15,20 @@ function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function resolveNativeHostPaths({ repositoryRoot, runtimeRoot, nativeHostsDir, executablePath }) {
+export function resolveNativeHostPaths({ repositoryRoot, runtimeRoot, instanceId, executablePath }) {
   const root = requireAbsolutePath(repositoryRoot, "repository root");
   const runtime = requireAbsolutePath(runtimeRoot, "runtime root");
-  const manifestDirectory = requireAbsolutePath(nativeHostsDir, "Native Messaging manifest directory");
   const nodeExecutable = requireAbsolutePath(executablePath, "Node executable");
-  const wrapperPath = path.join(runtime, "native-host", "gate-1-host.sh");
+  const instancePaths = resolveInstancePaths({ runtimeRoot: runtime, instanceId });
+  const nativeHostsDir = path.join(instancePaths.userDataDir, "NativeMessagingHosts");
+  const wrapperPath = path.join(instancePaths.instanceDir, "native-host", "gate-1-host.sh");
 
   return {
+    browserInstanceId: instanceId,
     hostPath: path.join(root, "native-host", "host.mjs"),
-    manifestPath: path.join(manifestDirectory, `${GATE_1_NATIVE_HOST_NAME}.json`),
+    manifestPath: path.join(nativeHostsDir, `${GATE_1_NATIVE_HOST_NAME}.json`),
     nodeExecutable,
+    userDataDir: instancePaths.userDataDir,
     wrapperPath,
   };
 }

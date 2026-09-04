@@ -20,10 +20,18 @@ npm run chrome -- plan poc-b
 
 ## Gate 1 の手動Extension導入
 
-通常版Chrome 137以降では、launcherは`--load-extension`でunpacked Extensionを導入しない。Gate 1を実機確認するときは、PoC Native Messaging manifestを導入した後に次を実行する。
+通常版Chrome 137以降では、launcherは`--load-extension`でunpacked Extensionを導入しない。Gate 1を実機確認するときは、対象instanceのPoC Native Messaging manifestを導入した後に次を実行する。
 
 ```sh
+npm run native-host -- install poc-gate1
 npm run chrome -- provision poc-gate1
+```
+
+Native Messaging manifestは、通常Chromeの設定領域ではなく、`poc-gate1`の専用user-data-dir直下の`NativeMessagingHosts/`へ導入される。`Default/`配下には置かない。`plan`・`uninstall`も同じinstance-idを明示する。
+
+```sh
+npm run native-host -- plan poc-gate1
+npm run native-host -- uninstall poc-gate1
 ```
 
 専用profileの`chrome://extensions`が開く。Developer modeを有効にし、**Load unpacked**でコマンド出力の`manual_extension_directory`を選択する。導入後にのみ、ExtensionがNative Hostへ接続する。通常の`start`は`about:blank`を開き、Extensionを自動導入しない。
