@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
+import { chmod, mkdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
 import test from "node:test";
+import { promisify } from "node:util";
 import { extensionIdFromPublicKey, GATE_1_EXTENSION_ID, GATE_1_EXTENSION_ORIGIN } from "../core/extension-id.mjs";
 import {
   installNativeHost,
+  legacyNativeHostWrapperContent,
   nativeHostManifestContent,
   nativeHostWrapperContent,
   resolveNativeHostPaths,
@@ -36,6 +39,7 @@ import { PairingSocketServer } from "../core/pairing-socket-server.mjs";
 import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "../core/pairing-protocol.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
+const execFile = promisify(execFileCallback);
 
 function collect(stream) {
   const chunks = [];
@@ -522,17 +526,95 @@ test("Native Messaging manifest install and uninstall protect pre-existing files
   });
 
   assert.equal((await installNativeHost(paths)).installed, true);
+  assert.equal((await installNativeHost(paths)).upgraded, false);
   assert.equal(await readFile(paths.manifestPath, "utf8"), nativeHostManifestContent(paths));
   assert.equal(await readFile(paths.wrapperPath, "utf8"), nativeHostWrapperContent(paths));
   assert.match(await readFile(paths.wrapperPath, "utf8"), /--pairing-runtime-root/);
   assert.match(await readFile(paths.wrapperPath, "utf8"), /--pairing-instance-id 'poc-a'/);
   assert.equal((await stat(paths.manifestPath)).mode & 0o777, 0o600);
   assert.equal((await stat(paths.wrapperPath)).mode & 0o777, 0o700);
-  assert.equal((await installNativeHost(paths)).installed, false);
+  assert.deepEqual(await installNativeHost(paths), {
+    installed: false,
+    upgraded: false,
+    manifestPath: paths.manifestPath,
+  });
 
   assert.equal((await uninstallNativeHost(paths)).removed, true);
   await assert.rejects(() => readFile(paths.manifestPath));
   await assert.rejects(() => readFile(paths.wrapperPath));
+});
+
+test("Native Host install atomically upgrades only the exact private Gate 1 wrapper", async () => {
+  const root = await readTemporaryRoot("browser-poc-manifest-upgrade-");
+  const paths = resolveNativeHostPaths({
+    repositoryRoot,
+    runtimeRoot: path.join(root, "runtime"),
+    instanceId: "poc-a",
+    executablePath: process.execPath,
+  });
+  await mkdir(path.dirname(paths.manifestPath), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(paths.wrapperPath), { recursive: true, mode: 0o700 });
+  await writeFile(paths.manifestPath, nativeHostManifestContent(paths), { mode: 0o600 });
+  await writeFile(paths.wrapperPath, legacyNativeHostWrapperContent(paths), { mode: 0o700 });
+
+  assert.deepEqual(await installNativeHost(paths), {
+    installed: false,
+    upgraded: true,
+    manifestPath: paths.manifestPath,
+  });
+  assert.equal(await readFile(paths.wrapperPath, "utf8"), nativeHostWrapperContent(paths));
+  assert.equal((await stat(paths.manifestPath)).mode & 0o777, 0o600);
+  assert.equal((await stat(paths.wrapperPath)).mode & 0o777, 0o700);
+  assert.equal((await uninstallNativeHost(paths)).removed, true);
+});
+
+test("Native Host CLI prints the wrapper upgrade result as JSON", async () => {
+  const root = await readTemporaryRoot("browser-poc-manifest-cli-upgrade-");
+  const runtimeRoot = path.join(root, "runtime");
+  const paths = resolveNativeHostPaths({
+    repositoryRoot,
+    runtimeRoot,
+    instanceId: "poc-a",
+    executablePath: process.execPath,
+  });
+  await mkdir(path.dirname(paths.manifestPath), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(paths.wrapperPath), { recursive: true, mode: 0o700 });
+  await writeFile(paths.manifestPath, nativeHostManifestContent(paths), { mode: 0o600 });
+  await writeFile(paths.wrapperPath, legacyNativeHostWrapperContent(paths), { mode: 0o700 });
+
+  const { stdout } = await execFile(
+    process.execPath,
+    [path.join(repositoryRoot, "scripts", "native-host-manifest.mjs"), "install", "poc-a"],
+    { env: { ...process.env, BROWSER_POC_RUNTIME_ROOT: runtimeRoot } },
+  );
+  assert.deepEqual(JSON.parse(stdout), {
+    installed: false,
+    upgraded: true,
+    manifestPath: paths.manifestPath,
+  });
+});
+
+test("Native Host install rejects unsafe legacy wrappers and manifests", async () => {
+  const root = await readTemporaryRoot("browser-poc-manifest-unsafe-");
+  const paths = resolveNativeHostPaths({
+    repositoryRoot,
+    runtimeRoot: path.join(root, "runtime"),
+    instanceId: "poc-a",
+    executablePath: process.execPath,
+  });
+  await mkdir(path.dirname(paths.manifestPath), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(paths.wrapperPath), { recursive: true, mode: 0o700 });
+  await writeFile(paths.manifestPath, nativeHostManifestContent(paths), { mode: 0o600 });
+  await writeFile(paths.wrapperPath, legacyNativeHostWrapperContent(paths), { mode: 0o700 });
+  await chmod(paths.wrapperPath, 0o644);
+  await assert.rejects(() => installNativeHost(paths), /refusing to overwrite/);
+
+  await chmod(paths.wrapperPath, 0o700);
+  const replacement = `${paths.wrapperPath}.replacement`;
+  await writeFile(replacement, "not-a-wrapper\n", { mode: 0o700 });
+  await rename(paths.wrapperPath, `${paths.wrapperPath}.saved`);
+  await symlink(replacement, paths.wrapperPath);
+  await assert.rejects(() => installNativeHost(paths), /refusing to overwrite/);
 });
 
 test("Native Messaging manifest refuses a non-PoC manifest", async () => {

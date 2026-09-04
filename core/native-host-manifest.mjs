@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { lstat, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { GATE_1_EXTENSION_ORIGIN } from "./extension-id.mjs";
 import { resolveInstancePaths } from "./chrome-instance.mjs";
@@ -13,6 +14,54 @@ function requireAbsolutePath(value, label) {
 
 function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function modeOf(info) {
+  return info.mode & 0o777;
+}
+
+async function readPrivateRegularFile(filePath, expectedMode, unsafeMessage) {
+  let info;
+  try {
+    info = await lstat(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile() || modeOf(info) !== expectedMode) {
+    throw new Error(unsafeMessage);
+  }
+  return await readFile(filePath, "utf8");
+}
+
+async function writeAtomically(filePath, content, mode) {
+  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${randomUUID()}.tmp`,
+  );
+  let handle;
+  try {
+    handle = await open(temporaryPath, "wx", mode);
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, filePath);
+  } finally {
+    await handle?.close();
+    await rm(temporaryPath, { force: true });
+  }
+}
+
+async function writeAndVerify(filePath, content, mode, unsafeMessage) {
+  await writeAtomically(filePath, content, mode);
+  const written = await readPrivateRegularFile(filePath, mode, unsafeMessage);
+  if (written !== content) {
+    throw new Error(unsafeMessage);
+  }
 }
 
 export function resolveNativeHostPaths({ repositoryRoot, runtimeRoot, instanceId, executablePath }) {
@@ -52,60 +101,65 @@ export function nativeHostWrapperContent({ nodeExecutable, hostPath, runtimeRoot
   return `#!/bin/sh\nexec ${shellQuote(nodeExecutable)} ${shellQuote(hostPath)} --pairing-runtime-root ${shellQuote(runtimeRoot)} --pairing-instance-id ${shellQuote(browserInstanceId)} "$@"\n`;
 }
 
-async function readIfPresent(filePath) {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return null;
-    }
-    throw error;
-  }
-}
-
-async function writeAtomically(filePath, content, mode) {
-  await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, content, { encoding: "utf8", mode });
-  await rename(temporaryPath, filePath);
+export function legacyNativeHostWrapperContent({ nodeExecutable, hostPath }) {
+  return `#!/bin/sh\nexec ${shellQuote(nodeExecutable)} ${shellQuote(hostPath)} "$@"\n`;
 }
 
 export async function installNativeHost(paths) {
   const manifest = nativeHostManifestContent(paths);
   const wrapper = nativeHostWrapperContent(paths);
-  const existingManifest = await readIfPresent(paths.manifestPath);
+  const legacyWrapper = legacyNativeHostWrapperContent(paths);
+  const manifestUnsafe = "refusing to overwrite an existing Native Messaging manifest";
+  const wrapperUnsafe = "refusing to overwrite an existing Native Host wrapper";
+  const existingManifest = await readPrivateRegularFile(paths.manifestPath, 0o600, manifestUnsafe);
   if (existingManifest !== null && existingManifest !== manifest) {
-    throw new Error("refusing to overwrite an existing Native Messaging manifest");
+    throw new Error(manifestUnsafe);
+  }
+  const existingWrapper = await readPrivateRegularFile(paths.wrapperPath, 0o700, wrapperUnsafe);
+  if (
+    existingWrapper !== null &&
+    existingWrapper !== wrapper &&
+    existingWrapper !== legacyWrapper
+  ) {
+    throw new Error(wrapperUnsafe);
   }
 
-  const existingWrapper = await readIfPresent(paths.wrapperPath);
-  if (existingWrapper !== null && existingWrapper !== wrapper) {
-    throw new Error("refusing to overwrite an existing Native Host wrapper");
+  let manifestInstalled = false;
+  let wrapperUpgraded = false;
+  if (existingManifest === null) {
+    await writeAndVerify(paths.manifestPath, manifest, 0o600, manifestUnsafe);
+    manifestInstalled = true;
   }
   if (existingWrapper === null) {
-    await writeAtomically(paths.wrapperPath, wrapper, 0o700);
-  }
-  if (existingManifest === null) {
-    await writeAtomically(paths.manifestPath, manifest, 0o600);
+    await writeAndVerify(paths.wrapperPath, wrapper, 0o700, wrapperUnsafe);
+  } else if (existingWrapper === legacyWrapper) {
+    await writeAndVerify(paths.wrapperPath, wrapper, 0o700, wrapperUnsafe);
+    wrapperUpgraded = true;
   }
 
-  return { installed: existingManifest === null, manifestPath: paths.manifestPath };
+  return {
+    installed: manifestInstalled,
+    upgraded: wrapperUpgraded,
+    manifestPath: paths.manifestPath,
+  };
 }
 
 export async function uninstallNativeHost(paths) {
   const manifest = nativeHostManifestContent(paths);
   const wrapper = nativeHostWrapperContent(paths);
-  const existingManifest = await readIfPresent(paths.manifestPath);
+  const manifestUnsafe = "refusing to remove a Native Messaging manifest not generated by this PoC";
+  const wrapperUnsafe = "refusing to remove a Native Host wrapper not generated by this PoC";
+  const existingManifest = await readPrivateRegularFile(paths.manifestPath, 0o600, manifestUnsafe);
   if (existingManifest === null) {
     return { removed: false, reason: "manifest_missing" };
   }
   if (existingManifest !== manifest) {
-    throw new Error("refusing to remove a Native Messaging manifest not generated by this PoC");
+    throw new Error(manifestUnsafe);
   }
 
-  const existingWrapper = await readIfPresent(paths.wrapperPath);
+  const existingWrapper = await readPrivateRegularFile(paths.wrapperPath, 0o700, wrapperUnsafe);
   if (existingWrapper !== null && existingWrapper !== wrapper) {
-    throw new Error("refusing to remove a Native Host wrapper not generated by this PoC");
+    throw new Error(wrapperUnsafe);
   }
 
   await rm(paths.manifestPath);

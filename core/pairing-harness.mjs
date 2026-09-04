@@ -144,24 +144,9 @@ async function replacePrivateFileAtomically(filePath, content) {
 async function ensureNativeHost(paths) {
   const expectedManifest = nativeHostManifestContent(paths);
   const expectedWrapper = nativeHostWrapperContent(paths);
-  const manifestMatches = await readExpectedPrivateFile(
-    paths.manifestPath,
-    expectedManifest,
-    0o600,
-    "Native Host manifest",
-  );
-  const wrapperMatches = await readExpectedPrivateFile(
-    paths.wrapperPath,
-    expectedWrapper,
-    0o700,
-    "Native Host wrapper",
-  );
-
-  if (!manifestMatches || !wrapperMatches) {
-    await installNativeHost(paths);
-    await readExpectedPrivateFile(paths.manifestPath, expectedManifest, 0o600, "Native Host manifest");
-    await readExpectedPrivateFile(paths.wrapperPath, expectedWrapper, 0o700, "Native Host wrapper");
-  }
+  await installNativeHost(paths);
+  await readExpectedPrivateFile(paths.manifestPath, expectedManifest, 0o600, "Native Host manifest");
+  await readExpectedPrivateFile(paths.wrapperPath, expectedWrapper, 0o700, "Native Host wrapper");
 }
 
 async function closeOwnedResources({ server, descriptorPath, descriptorOwnership, claimPath, claimOwnership }) {

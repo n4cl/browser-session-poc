@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, rename, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { resolveNativeHostPaths } from "../core/native-host-manifest.mjs";
+import {
+  legacyNativeHostWrapperContent,
+  nativeHostManifestContent,
+  nativeHostWrapperContent,
+  resolveNativeHostPaths,
+} from "../core/native-host-manifest.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
 async function temporaryRuntimeRoot() {
@@ -66,6 +71,26 @@ test("harness defaults its descriptor lease to ten minutes", async (t) => {
     Date.parse(harness.descriptor.expires_at) - Date.parse(harness.descriptor.issued_at),
     600_000,
   );
+  await harness.close();
+});
+
+test("harness upgrades an exact private Gate 1 wrapper before publishing its descriptor", async (t) => {
+  const runtimeRoot = await temporaryRuntimeRoot();
+  const hostPaths = resolveNativeHostPaths({
+    repositoryRoot: path.resolve(import.meta.dirname, ".."),
+    runtimeRoot,
+    instanceId: "poc-a",
+    executablePath: process.execPath,
+  });
+  await mkdir(path.dirname(hostPaths.manifestPath), { recursive: true, mode: 0o700 });
+  await mkdir(path.dirname(hostPaths.wrapperPath), { recursive: true, mode: 0o700 });
+  await writeFile(hostPaths.manifestPath, nativeHostManifestContent(hostPaths), { mode: 0o600 });
+  await writeFile(hostPaths.wrapperPath, legacyNativeHostWrapperContent(hostPaths), { mode: 0o700 });
+
+  const harness = await startPairingHarness(harnessOptions(runtimeRoot, "poc-a"));
+  t.after(() => harness.close().catch(() => {}));
+  assert.equal(await readFile(hostPaths.wrapperPath, "utf8"), nativeHostWrapperContent(hostPaths));
+  assert.deepEqual(JSON.parse(await readFile(harness.paths.activeDescriptorPath, "utf8")), harness.descriptor);
   await harness.close();
 });
 
@@ -157,7 +182,7 @@ test("Native Host files must be private regular files with the expected content"
   await symlink(targetPath, hostPaths.manifestPath);
   await assert.rejects(
     () => startPairingHarness(harnessOptions(runtimeRoot, "poc-a")),
-    /Native Host manifest must be a non-symlink regular file/,
+    /refusing to overwrite an existing Native Messaging manifest/,
   );
   await assert.rejects(() => readFile(claimPath(runtimeRoot, "poc-a"), "utf8"), /ENOENT/);
 });
