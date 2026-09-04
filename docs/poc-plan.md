@@ -99,6 +99,8 @@ pairing pageへnonceを渡す方式がChrome上で安定しない場合は、こ
 
 ### Gate 1: 1 ChromeとNative Messagingの疎通
 
+進捗: **合格**（2026-09-04）。実機結果は[Gate 1実機試験結果](./gate-1-results.md)を参照。
+
 実装:
 
 - 固定IDを持つ最小Extension
