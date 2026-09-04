@@ -5,8 +5,10 @@ import {
   acquireInstanceClaim,
   buildChromeArguments,
   parseProcessIdentity,
+  parseProcessIdentities,
   processMatchesState,
   readState,
+  recoverStaleChrome,
   releaseInstanceClaim,
   resolveInstancePaths,
   terminateOwnedChrome,
@@ -124,6 +126,105 @@ test("process identity parser preserves macOS single-digit day output", () => {
     },
   );
   assert.equal(parseProcessIdentity("not ps output"), null);
+});
+
+test("process list parser preserves PID and macOS single-digit day output", () => {
+  assert.deepEqual(
+    parseProcessIdentities(
+      "  42 Thu Sep  4 12:00:00 2026 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/tmp/a\n",
+    ),
+    [
+      {
+        pid: 42,
+        processStart: "Thu Sep  4 12:00:00 2026",
+        command:
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/tmp/a",
+      },
+    ],
+  );
+  assert.throws(() => parseProcessIdentities("not ps output"), /unable to parse/);
+});
+
+test("stale Chrome recovery releases a claim only after no matching process is found", async () => {
+  const state = {
+    chrome_executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chrome_pid: 42,
+    process_start: "Thu Sep  4 12:00:00 2026",
+    user_data_dir: "/tmp/browser-poc/profiles/a",
+    state: "running",
+  };
+  const calls = [];
+
+  const recovered = await recoverStaleChrome({
+    state,
+    statePath: "/tmp/state.json",
+    claimPath: "/tmp/a.claim",
+    readIdentity: () => null,
+    listIdentities: () => [],
+    writeState: async (statePath, value) => calls.push({ type: "state", statePath, value }),
+    releaseClaim: async (claimPath) => calls.push({ type: "claim", claimPath }),
+    now: () => "2026-09-04T12:00:00.000Z",
+  });
+
+  assert.deepEqual(recovered, {
+    ...state,
+    state: "recovered",
+    recovered_at: "2026-09-04T12:00:00.000Z",
+  });
+  assert.deepEqual(calls, [
+    { type: "state", statePath: "/tmp/state.json", value: recovered },
+    { type: "claim", claimPath: "/tmp/a.claim" },
+  ]);
+});
+
+test("stale Chrome recovery fails closed for an assigned PID or matching profile process", async () => {
+  const state = {
+    chrome_executable: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    chrome_pid: 42,
+    process_start: "Thu Sep  4 12:00:00 2026",
+    user_data_dir: "/tmp/browser-poc/profiles/a",
+  };
+  let changed = false;
+  const noChange = {
+    statePath: "/tmp/state.json",
+    claimPath: "/tmp/a.claim",
+    writeState: async () => {
+      changed = true;
+    },
+    releaseClaim: async () => {
+      changed = true;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      recoverStaleChrome({
+        state,
+        ...noChange,
+        readIdentity: () => ({ processStart: "Fri Sep  5 12:00:00 2026", command: "/usr/bin/other" }),
+        listIdentities: () => [],
+      }),
+    /recorded Chrome PID is still assigned/,
+  );
+  assert.equal(changed, false);
+
+  await assert.rejects(
+    () =>
+      recoverStaleChrome({
+        state,
+        ...noChange,
+        readIdentity: () => null,
+        listIdentities: () => [
+          {
+            pid: 99,
+            processStart: "Fri Sep  5 12:00:00 2026",
+            command: `${state.chrome_executable} --new-window --user-data-dir=${state.user_data_dir}`,
+          },
+        ],
+      }),
+    /still uses the recorded user data directory/,
+  );
+  assert.equal(changed, false);
 });
 
 test("owned Chrome termination refuses an identity mismatch before sending a signal", async () => {

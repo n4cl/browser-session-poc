@@ -114,6 +114,39 @@ export function readProcessIdentity(pid) {
   return parseProcessIdentity(result.stdout);
 }
 
+export function parseProcessIdentities(output) {
+  const lines = output.trim();
+  if (!lines) {
+    return [];
+  }
+
+  return lines.split("\n").map((line) => {
+    const match = line.match(/^\s*(\d+)\s+(.{24})\s+(.+)$/);
+    if (!match) {
+      throw new Error("unable to parse process list output");
+    }
+    return {
+      pid: Number.parseInt(match[1], 10),
+      processStart: match[2],
+      command: match[3],
+    };
+  });
+}
+
+export function listProcessIdentities() {
+  const result = spawnSync("ps", ["-ww", "-o", "pid=", "-o", "lstart=", "-o", "command=", "-ax"], {
+    encoding: "utf8",
+  });
+  if (result.error) {
+    throw new Error(`unable to list processes: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`unable to list processes: ps exited with status ${result.status}`);
+  }
+
+  return parseProcessIdentities(result.stdout);
+}
+
 export function isExpectedChromeProcess({ chromeExecutable, userDataDir, identity }) {
   if (
     !identity ||
@@ -151,6 +184,45 @@ export function processMatchesState({ state, identity }) {
       identity,
     })
   );
+}
+
+export async function recoverStaleChrome({
+  state,
+  statePath,
+  claimPath,
+  readIdentity = readProcessIdentity,
+  listIdentities = listProcessIdentities,
+  writeState = writeStateAtomically,
+  releaseClaim = releaseInstanceClaim,
+  now = () => new Date().toISOString(),
+}) {
+  if (!Number.isSafeInteger(state?.chrome_pid) || state.chrome_pid <= 0) {
+    throw new Error("refusing to recover state without a valid recorded Chrome PID");
+  }
+
+  if (readIdentity(state.chrome_pid) !== null) {
+    throw new Error("refusing to recover: recorded Chrome PID is still assigned");
+  }
+
+  const matchingProcess = listIdentities().find((identity) =>
+    isExpectedChromeProcess({
+      chromeExecutable: state.chrome_executable,
+      userDataDir: state.user_data_dir,
+      identity,
+    }),
+  );
+  if (matchingProcess) {
+    throw new Error("refusing to recover: a Chrome process still uses the recorded user data directory");
+  }
+
+  const recoveredState = {
+    ...state,
+    state: "recovered",
+    recovered_at: now(),
+  };
+  await writeState(statePath, recoveredState);
+  await releaseClaim(claimPath);
+  return recoveredState;
 }
 
 export async function waitForProcessExit({

@@ -13,6 +13,7 @@ import {
   processMatchesState,
   readProcessIdentity,
   readState,
+  recoverStaleChrome,
   releaseInstanceClaim,
   resolveInstancePaths,
   terminateOwnedChrome,
@@ -27,6 +28,7 @@ function usage() {
     "  npm run chrome -- provision <instance-id>",
     "  npm run chrome -- status <instance-id>",
     "  npm run chrome -- stop <instance-id>",
+    "  npm run chrome -- recover <instance-id>",
     "",
     "Environment:",
     "  BROWSER_POC_RUNTIME_ROOT  Runtime directory (default: .runtime)",
@@ -207,6 +209,18 @@ async function stop(instanceId) {
   process.stdout.write(`stopped ${instanceId}\n`);
 }
 
+async function recover(instanceId) {
+  const config = configuration(instanceId);
+  const state = await readState(config.statePath);
+  assertStateMatchesConfiguration(state, config);
+  await recoverStaleChrome({
+    state,
+    statePath: config.statePath,
+    claimPath: config.claimPath,
+  });
+  process.stdout.write(`recovered ${instanceId}\n`);
+}
+
 const [command, instanceId, ...extraArguments] = process.argv.slice(2);
 if (!command || !instanceId || extraArguments.length > 0) {
   process.stderr.write(`${usage()}\n`);
@@ -227,6 +241,8 @@ try {
     await status(instanceId);
   } else if (command === "stop") {
     await stop(instanceId);
+  } else if (command === "recover") {
+    await recover(instanceId);
   } else {
     process.stderr.write(`${usage()}\n`);
     process.exitCode = 2;
