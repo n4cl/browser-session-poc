@@ -171,7 +171,7 @@ export function probePairingSocket(socketPath, { timeoutMs = 250 } = {}) {
   });
 }
 
-export async function recoverStalePairingClaim({ runtimeRoot, instanceId, now = () => new Date(), readIdentity = readProcessIdentity, listIdentities = listProcessIdentities, probeSocket = probePairingSocket }) {
+export async function recoverStalePairingClaim({ runtimeRoot, instanceId, now = () => new Date(), readIdentity = readProcessIdentity, listIdentities = listProcessIdentities, probeSocket = probePairingSocket, requesterPid = null }) {
   const paths = resolvePairingPaths({ runtimeRoot, instanceId });
   const recorded = await readClaim(claimPath(paths));
   if (recorded === null) return { recovered: false, reason: "claim_missing" };
@@ -179,7 +179,7 @@ export async function recoverStalePairingClaim({ runtimeRoot, instanceId, now = 
   if (!(recoveryTime instanceof Date) || !Number.isFinite(recoveryTime.valueOf())) throw new TypeError("now must return a valid Date");
   const legacy = isLegacyClaim(recorded.claim, paths);
   if (legacy) {
-    if (listIdentities().some((identity) => isLegacyHarness(identity, paths.instanceId))) throw new Error("refusing to recover: a legacy pairing harness process may still be running");
+    if (listIdentities().some((identity) => identity.pid !== requesterPid && isLegacyHarness(identity, paths.instanceId))) throw new Error("refusing to recover: a legacy pairing harness process may still be running");
   } else {
     validatePairingClaim(recorded.claim, { paths });
     if (ownsClaim(recorded.claim, readIdentity(recorded.claim.pid)) || listIdentities().some((identity) => ownsClaim(recorded.claim, identity))) throw new Error("refusing to recover: recorded pairing harness is still running");
@@ -201,7 +201,7 @@ export async function acquireOrRecoverPairingClaim({ paths, ownerId, pid, identi
     await writeNewPrivateFile(filePath, content);
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
-    await recoverStalePairingClaim({ runtimeRoot: paths.runtimeRoot, instanceId: paths.instanceId, now, readIdentity, listIdentities, probeSocket });
+    await recoverStalePairingClaim({ runtimeRoot: paths.runtimeRoot, instanceId: paths.instanceId, now, readIdentity, listIdentities, probeSocket, requesterPid: pid });
     await writeNewPrivateFile(filePath, content);
   }
   const info = await lstat(filePath);

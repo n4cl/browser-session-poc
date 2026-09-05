@@ -103,8 +103,9 @@ test("an expired legacy claim recovers only after its descriptor is expired and 
     runtimeRoot: root,
     instanceId: "poc-a",
     now: () => new Date("2030-01-01T00:02:00.000Z"),
-    listIdentities: () => [],
+    listIdentities: () => [{ ...IDENTITY, pid: 44 }],
     probeSocket: async () => false,
+    requesterPid: 44,
   });
   assert.deepEqual(recovered, { recovered: true, legacy: true });
   await assert.rejects(() => readFile(filePath), /ENOENT/);
@@ -116,7 +117,7 @@ test("legacy recovery fails closed before expiry or when a legacy harness may ex
   const paths = resolvePairingPaths({ runtimeRoot: root, instanceId: "poc-a" });
   await writeClaim(paths, { instance_id: "poc-a", owner_id: "legacy-owner" });
   await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", listIdentities: () => [] }), /without an expired descriptor/);
-  await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", listIdentities: () => [IDENTITY] }), /may still be running/);
+  await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", requesterPid: 44, listIdentities: () => [{ ...IDENTITY, pid: 45 }] }), /may still be running/);
 });
 
 test("recovery fails closed for changed claim and descriptor paths", async () => {
