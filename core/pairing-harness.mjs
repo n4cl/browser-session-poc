@@ -91,7 +91,7 @@ async function closeOwnedResources({ server, descriptorPath, descriptorOwnership
 export async function startPairingHarness({
   runtimeRoot,
   instanceId,
-  ttlMs = 600_000,
+  ttlMs = 3_600_000,
   now = () => new Date(),
   createUuid = randomUUID,
   repositoryRoot = path.resolve(import.meta.dirname, ".."),

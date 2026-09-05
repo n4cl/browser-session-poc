@@ -48,6 +48,8 @@ Extensionの`storage` permissionは、`pair_active`で確定したbinding（sess
 
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 
-ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。明示的なrotation/resetは後続のsession harness実装で扱う。Gate 1の実機結果は過去の確認記録として保持している。
+ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。Options画面からの明示的なbinding resetは実装済みだが、lease rotationとrenewalは未実装である。Gate 1の実機結果は過去の確認記録として保持している。
 
 `npm run pairing -- start <instance-id>` は前景session harnessを開始する。起動時に既存claimを検出した場合は、記録済みprocess identityと全プロセス列挙で生きたharnessがいないことを確認してからのみ回収する。旧claim形式は、対応descriptorの期限切れ、socket接続不能、該当harnessプロセス不在の全条件が必要である。不明なclaim、descriptor、socket、process状態はfail-closedで保持する。
+
+PoC harnessの既定leaseは1時間である。満了時はACTIVE状態でもREVOKEDになり、長期session向けのrenewalは未実装である。
