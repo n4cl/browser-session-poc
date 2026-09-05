@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { readProcessIdentity } from "../core/chrome-instance.mjs";
 import {
   createPairingClaim,
   recoverStalePairingClaim,
@@ -44,6 +45,26 @@ test("new claim records process identity and recovers a reused PID only when no 
   });
   assert.deepEqual(recovered, { recovered: true, legacy: false });
   await assert.rejects(() => readFile(filePath), /ENOENT/);
+});
+
+test("the actual ps identity of this Node process keeps a v2 partial claim live", async () => {
+  const root = await runtimeRoot();
+  const paths = resolvePairingPaths({ runtimeRoot: root, instanceId: "poc-a" });
+  const identity = readProcessIdentity(process.pid);
+  assert.ok(identity);
+  const claim = createPairingClaim({
+    paths,
+    ownerId: "owner-a",
+    pid: process.pid,
+    identity,
+    executable: process.execPath,
+  });
+  await writeClaim(paths, claim);
+
+  await assert.rejects(
+    () => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a" }),
+    /recorded pairing harness is still running/,
+  );
 });
 
 test("recovery refuses a live new-schema owner and does not affect another instance", async () => {
@@ -96,4 +117,21 @@ test("legacy recovery fails closed before expiry or when a legacy harness may ex
   await writeClaim(paths, { instance_id: "poc-a", owner_id: "legacy-owner" });
   await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", listIdentities: () => [] }), /without an expired descriptor/);
   await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", listIdentities: () => [IDENTITY] }), /may still be running/);
+});
+
+test("recovery fails closed for changed claim and descriptor paths", async () => {
+  const root = await runtimeRoot();
+  const paths = resolvePairingPaths({ runtimeRoot: root, instanceId: "poc-a" });
+  const claim = createPairingClaim({ paths, ownerId: "owner-a", pid: 42, identity: IDENTITY, executable: EXECUTABLE });
+  const filePath = await writeClaim(paths, claim);
+  await chmod(filePath, 0o644);
+  await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", readIdentity: () => null, listIdentities: () => [] }), /pairing claim must be/);
+
+  await chmod(filePath, 0o600);
+  await mkdir(paths.pairingDirectory, { recursive: true, mode: 0o700 });
+  await mkdir(paths.socketDirectory, { recursive: true, mode: 0o700 });
+  const targetPath = path.join(root, "outside-descriptor.json");
+  await writeFile(targetPath, "{}\n", { mode: 0o600 });
+  await symlink(targetPath, paths.activeDescriptorPath);
+  await assert.rejects(() => recoverStalePairingClaim({ runtimeRoot: root, instanceId: "poc-a", readIdentity: () => null, listIdentities: () => [] }), /active pairing descriptor must be/);
 });

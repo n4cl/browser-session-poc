@@ -62,8 +62,7 @@ function claimPath(paths) {
 function ownsClaim(claim, identity) {
   return identity !== null &&
     identity.processStart === claim.process_start &&
-    identity.command === claim.process_command &&
-    identity.command.startsWith(`${claim.executable} `);
+    identity.command === claim.process_command;
 }
 
 function isLegacyClaim(claim, paths) {

@@ -88,11 +88,35 @@ async function closeOwnedResources({ server, descriptorPath, descriptorOwnership
   if (errors.length) throw new AggregateError(errors, "pairing harness cleanup failed");
 }
 
-export async function startPairingHarness({ runtimeRoot, instanceId, ttlMs = 600_000, now = () => new Date(), createUuid = randomUUID, repositoryRoot = path.resolve(import.meta.dirname, ".."), executablePath = process.execPath, processId = process.pid, readIdentity = readProcessIdentity, listIdentities = listProcessIdentities, probeSocket = probePairingSocket }) {
-  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new TypeError("ttlMs must be positive");
+export async function startPairingHarness({
+  runtimeRoot,
+  instanceId,
+  ttlMs = 600_000,
+  now = () => new Date(),
+  createUuid = randomUUID,
+  repositoryRoot = path.resolve(import.meta.dirname, ".."),
+  executablePath = process.execPath,
+  processId = process.pid,
+  readIdentity = readProcessIdentity,
+  listIdentities = listProcessIdentities,
+  probeSocket = probePairingSocket,
+}) {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+    throw new TypeError("ttlMs must be positive");
+  }
   const paths = resolvePairingPaths({ runtimeRoot, instanceId });
   const generationPath = path.join(paths.instanceDir, "pairing-generation.json");
-  const { claimPath, claimOwnership } = await acquireOrRecoverPairingClaim({ paths, ownerId: createUuid(), pid: processId, identity: readIdentity(processId), executable: process.execPath, now, readIdentity, listIdentities, probeSocket });
+  const { claimPath, claimOwnership } = await acquireOrRecoverPairingClaim({
+    paths,
+    ownerId: createUuid(),
+    pid: processId,
+    identity: readIdentity(processId),
+    executable: process.execPath,
+    now,
+    readIdentity,
+    listIdentities,
+    probeSocket,
+  });
   let descriptorOwnership;
   let server;
   try {
@@ -102,16 +126,54 @@ export async function startPairingHarness({ runtimeRoot, instanceId, ttlMs = 600
     const hostPaths = resolveNativeHostPaths({ repositoryRoot, runtimeRoot: paths.runtimeRoot, instanceId, executablePath });
     await ensureNativeHost(hostPaths);
     const issuedAt = now();
-    if (!(issuedAt instanceof Date) || !Number.isFinite(issuedAt.valueOf())) throw new TypeError("now must return a valid Date");
-    const descriptor = createPairingDescriptor({ paths, profileInstanceId: metadata.profile_instance_id, sessionId: createUuid(), generation, socketPath: await createSocketPath(paths, { createUuid }), issuedAt: issuedAt.toISOString(), expiresAt: new Date(issuedAt.valueOf() + ttlMs).toISOString(), leaseId: createUuid(), pairingNonce: createUuid() });
+    if (!(issuedAt instanceof Date) || !Number.isFinite(issuedAt.valueOf())) {
+      throw new TypeError("now must return a valid Date");
+    }
+    const descriptor = createPairingDescriptor({
+      paths,
+      profileInstanceId: metadata.profile_instance_id,
+      sessionId: createUuid(),
+      generation,
+      socketPath: await createSocketPath(paths, { createUuid }),
+      issuedAt: issuedAt.toISOString(),
+      expiresAt: new Date(issuedAt.valueOf() + ttlMs).toISOString(),
+      leaseId: createUuid(),
+      pairingNonce: createUuid(),
+    });
     server = new PairingSocketServer({ paths, descriptor, profileInstanceId: metadata.profile_instance_id, now: issuedAt });
     await server.listen();
     await writeActivePairingDescriptor(paths, descriptor, { profileInstanceId: metadata.profile_instance_id, now: issuedAt });
     descriptorOwnership = await recordOwnership(paths.activeDescriptorPath, `${JSON.stringify(descriptor)}\n`);
     let closing;
-    return { paths, descriptor, server, close() { if (!closing) closing = closeOwnedResources({ server, descriptorPath: paths.activeDescriptorPath, descriptorOwnership, claimPath, claimOwnership }); return closing; } };
+    return {
+      paths,
+      descriptor,
+      server,
+      close() {
+        if (!closing) {
+          closing = closeOwnedResources({
+            server,
+            descriptorPath: paths.activeDescriptorPath,
+            descriptorOwnership,
+            claimPath,
+            claimOwnership,
+          });
+        }
+        return closing;
+      },
+    };
   } catch (error) {
-    try { await closeOwnedResources({ server, descriptorPath: paths.activeDescriptorPath, descriptorOwnership, claimPath, claimOwnership }); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "pairing harness setup rollback failed"); }
+    try {
+      await closeOwnedResources({
+        server,
+        descriptorPath: paths.activeDescriptorPath,
+        descriptorOwnership,
+        claimPath,
+        claimOwnership,
+      });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "pairing harness setup rollback failed");
+    }
     throw error;
   }
 }
