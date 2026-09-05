@@ -101,7 +101,7 @@ test("harness rejects a second claim while preserving the first instance", async
 
   await assert.rejects(
     () => startPairingHarness(harnessOptions(runtimeRoot, "poc-a")),
-    /EEXIST/,
+    /recorded pairing harness is still running/,
   );
   assert.equal(harness.server.state.phase, "ISSUED");
   assert.deepEqual(JSON.parse(await readFile(harness.paths.activeDescriptorPath, "utf8")), harness.descriptor);
