@@ -111,6 +111,8 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 2: A/Bの決定的pairing
 
+進捗: **単一instance経路を実機通過**（2026-09-05）。Gate全体の合格ではない。詳細は[Gate 2単一instance実機試験結果](./gate-2-results.md)を参照。
+
 実装:
 
 - nonce descriptorとsession専用Unix socket
