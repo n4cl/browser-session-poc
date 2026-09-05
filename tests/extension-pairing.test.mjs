@@ -143,12 +143,13 @@ test("resume preserves its stored binding and malformed pair_active disconnects 
   assert.deepEqual(invalidChrome.setCalls, []);
 });
 
-test("disconnect records lastError and schedules one bounded reconnect without changing initial to resume", async () => {
+test("handshake disconnect reports an error and schedules one bounded reconnect", async () => {
   const first = fakePort();
   const second = fakePort();
   const chrome = fakeChrome({ ports: [first, second] });
   const timers = [];
-  const reports = [];
+  const errors = [];
+  const warnings = [];
   const controller = createPairingController({
     chromeApi: chrome.api,
     setTimer(callback, delay) {
@@ -157,7 +158,8 @@ test("disconnect records lastError and schedules one bounded reconnect without c
       return timer;
     },
     clearTimer(timer) { timer.cleared = true; },
-    report(...args) { reports.push(args); },
+    reportError(...args) { errors.push(args); },
+    reportWarning(...args) { warnings.push(args); },
   });
   await controller.connect();
   chrome.api.runtime.lastError = { message: "connection lost" };
@@ -165,10 +167,48 @@ test("disconnect records lastError and schedules one bounded reconnect without c
   first.disconnect();
   assert.equal(timers.length, 1);
   assert.equal(timers[0].delay, 100);
-  assert.deepEqual(reports, [["Native Messaging connection closed:", "connection lost"]]);
+  assert.deepEqual(errors, [["Native Messaging connection closed before pairing completed:", "connection lost"]]);
+  assert.deepEqual(warnings, []);
   timers[0].callback();
   await settle();
   assert.deepEqual(chrome.connectedNames, ["com.browser_session_poc.gate1", "com.browser_session_poc.gate1"]);
   assert.deepEqual(second.messages, [{ type: "pair_start", protocol_version: 1 }]);
   assert.equal(controller.getState().retryScheduled, false);
+});
+
+test("active disconnect warns, keeps its binding, and reconnects without an error", async () => {
+  const first = fakePort();
+  const second = fakePort();
+  const chrome = fakeChrome({ storedBinding: binding, ports: [first, second] });
+  const timers = [];
+  const errors = [];
+  const warnings = [];
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer(callback, delay) {
+      const timer = { callback, delay };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer() {},
+    reportError(...args) { errors.push(args); },
+    reportWarning(...args) { warnings.push(args); },
+  });
+  await controller.connect();
+  first.emitMessage(challenge("resume"));
+  await settle();
+  first.emitMessage(active());
+  await settle();
+  assert.equal(controller.getState().phase, "ACTIVE");
+
+  chrome.api.runtime.lastError = { message: "Native host has exited." };
+  first.disconnect();
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, [["Native Messaging connection closed after pairing; reconnecting:", "Native host has exited."]]);
+  assert.deepEqual(chrome.setCalls, []);
+  assert.deepEqual(chrome.storage.pairing_binding, binding);
+  assert.equal(timers.length, 1);
+  timers[0].callback();
+  await settle();
+  assert.deepEqual(second.messages, [{ type: "resume_start", protocol_version: 1, ...binding }]);
 });

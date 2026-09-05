@@ -11,8 +11,12 @@ const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
 const STORAGE_KEY = "pairing_binding";
 const RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000];
 
-function diagnostic(message, detail) {
+function reportErrorToConsole(message, detail) {
   console.error(message, detail);
+}
+
+function reportWarningToConsole(message, detail) {
+  console.warn(message, detail);
 }
 
 /** Chrome lifecycle adapter; it reconnects only to the configured Native Host name. */
@@ -21,7 +25,8 @@ export function createPairingController({
   nativeHostName = NATIVE_HOST_NAME,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  report = diagnostic,
+  reportError = reportErrorToConsole,
+  reportWarning = reportWarningToConsole,
 } = {}) {
   if (!chromeApi?.runtime?.connectNative || !chromeApi?.storage?.local) {
     throw new TypeError("Chrome runtime and local storage are required");
@@ -65,9 +70,14 @@ export function createPairingController({
 
   const onDisconnect = (target) => {
     if (port !== target) return;
+    const phaseAtDisconnect = phase;
     const errorMessage = chromeApi.runtime.lastError?.message;
     if (errorMessage) {
-      report("Native Messaging connection closed:", errorMessage);
+      if (phaseAtDisconnect === "ACTIVE") {
+        reportWarning("Native Messaging connection closed after pairing; reconnecting:", errorMessage);
+      } else {
+        reportError("Native Messaging connection closed before pairing completed:", errorMessage);
+      }
     }
     port = undefined;
     phase = "IDLE";
