@@ -44,6 +44,8 @@ npm run native-host -- uninstall poc-gate1
 
 Extensionの`storage` permissionは、`pair_active`で確定したbinding（session/browser/profile/generation/lease）だけを保存し、次回に同じinstanceへ`resume_start`するために使う。challengeやnonceは保存しない。
 
+保存済みbindingが古くなった場合は、自動で消去されない。対象PoC Chromeで`chrome://extensions`を開き、この拡張機能の「詳細」から「拡張機能のオプション」を開く。「保存済みの接続情報を削除して再読み込み」を選ぶと、bindingを削除してから拡張機能を再読み込みし、次回は`pair_start`から開始する。
+
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 
 ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。明示的なrotation/resetは後続のsession harness実装で扱う。Gate 1の実機結果は過去の確認記録として保持している。

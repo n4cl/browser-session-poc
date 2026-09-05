@@ -131,6 +131,7 @@ test("manifest public key derives the fixed unpacked extension ID", async () => 
   assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage"]);
   assert.equal(manifest.permissions.includes("debugger"), false);
   assert.equal(manifest.host_permissions, undefined);
+  assert.deepEqual(manifest.options_ui, { page: "options.html", open_in_tab: true });
   const background = await readFile(path.join(repositoryRoot, "extension", "background.mjs"), "utf8");
   assert.match(background, /chrome\.runtime\.onInstalled\.addListener/);
   assert.match(background, /chromeApi\.runtime\.connectNative/);

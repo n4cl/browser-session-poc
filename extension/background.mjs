@@ -6,9 +6,10 @@ import {
   validatePairChallenge,
   respondToPing,
 } from "./pairing-protocol.mjs";
+import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
 const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
-const STORAGE_KEY = "pairing_binding";
+const STORAGE_KEY = PAIRING_BINDING_STORAGE_KEY;
 const RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000];
 
 function reportErrorToConsole(message, detail) {
