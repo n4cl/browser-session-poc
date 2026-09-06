@@ -147,9 +147,10 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 この作業単位の入力・出力制約:
 
-- `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。
-- session socket上のbrowser command responseは64 KiB以下とし、タブは`id`、`window_id`、`title`、`url`、`active`だけを返す。
+- `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。同一generationでは発行済みのbrowser command request IDを再利用しない。timeout後の遅延responseはpendingでないためfence対象となる。
+- session socket上のbrowser command responseは64 KiB以下とし、タブは`id`、`window_id`、`title`、`url`、`active`だけを返す。`title`と`url`は`string | null`で、Chrome APIが`undefined`を返したときだけ`null`に正規化する。操作対象にできない`id`または`windowId`のタブは、そのタブだけを一覧から除外する。
 - `tabs` APIを利用できない場合と応答過大時は明示的なerror codeで失敗し、timeout時にcommandを自動再送しない。
+- PoCでは遅延responseとの衝突を避けるため、generationごとに最大4,096件のbrowser command request IDを保持する。この上限に達したgenerationは新規commandを拒否する。
 
 合格条件:
 

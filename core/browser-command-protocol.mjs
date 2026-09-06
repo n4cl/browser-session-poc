@@ -4,6 +4,7 @@ export const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list"]);
 export const BROWSER_COMMAND_TIMEOUT_MAX_MS = 30_000;
 export const BROWSER_COMMAND_REQUEST_ID_MAX_LENGTH = 128;
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
+export const BROWSER_COMMAND_USED_REQUEST_ID_MAX = 4_096;
 
 function fail(message = "invalid browser command message") {
   throw new Error(message);
@@ -43,8 +44,10 @@ function assertRequestId(requestId) {
 function assertTab(tab) {
   exactFields(tab, ["active", "id", "title", "url", "window_id"]);
   if (!Number.isSafeInteger(tab.id) || tab.id < 0 || !Number.isSafeInteger(tab.window_id) || tab.window_id < 0 ||
-    typeof tab.active !== "boolean" || typeof tab.title !== "string" || typeof tab.url !== "string" ||
-    tab.title.length > 4_096 || tab.url.length > 8_192) {
+    typeof tab.active !== "boolean" || (tab.title !== null && typeof tab.title !== "string") ||
+    (tab.url !== null && typeof tab.url !== "string") ||
+    (typeof tab.title === "string" && tab.title.length > 4_096) ||
+    (typeof tab.url === "string" && tab.url.length > 8_192)) {
     fail("tab is invalid");
   }
 }

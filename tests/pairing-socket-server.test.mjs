@@ -178,6 +178,16 @@ test("browser_status and tabs_list stay correlated to the active instance and ex
   const timeout = fixture.server.requestTabsList({ requestId: "tabs-timeout", timeoutMs: 1 });
   assert.equal((await client.next()).request_id, "tabs-timeout");
   await assert.rejects(timeout, (error) => error.code === "timeout");
+  assert.throws(
+    () => fixture.server.requestTabsList({ requestId: "tabs-timeout", timeoutMs: 1 }),
+    /request id is already pending/,
+  );
+  const staleClosed = once(client.socket, "close");
+  client.send(encodeNativeMessage(message(fixture.descriptor, "tabs_list_response", "connection-a", {
+    request_id: "tabs-timeout",
+    tabs: [],
+  })));
+  await staleClosed;
 });
 
 test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {

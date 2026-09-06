@@ -174,6 +174,22 @@ test("browser commands preserve identity, correlate responses, and reject timeou
     requestId: "status-1",
     response: { ok: true, status: { extension_connected: true, chrome_tabs_available: true } },
   }]);
+  assert.throws(
+    () => issueBrowserCommand(completed.state, { command: "browser_status", requestId: "status-1" }),
+    PairingProtocolError,
+  );
+
+  const listed = issueBrowserCommand(activeState(), { command: "tabs_list", requestId: "tabs-list" });
+  const listedResponse = reducePairingMessage(listed.state, {
+    type: "tabs_list_response",
+    ...identity("connection-a"),
+    request_id: "tabs-list",
+    tabs: [{ id: 3, window_id: 1, title: null, url: null, active: false }],
+  });
+  assert.deepEqual(listedResponse.effects[0].response, {
+    ok: true,
+    tabs: [{ id: 3, window_id: 1, title: null, url: null, active: false }],
+  });
 
   const tabs = issueBrowserCommand(activeState(), { command: "tabs_list", requestId: "tabs-1" });
   const cancelled = cancelBrowserCommand(tabs.state, "tabs-1");
@@ -182,6 +198,19 @@ test("browser commands preserve identity, correlate responses, and reject timeou
     requestId: "tabs-1",
     response: { ok: false, errorCode: "timeout" },
   }]);
+  assert.throws(
+    () => issueBrowserCommand(cancelled.state, { command: "tabs_list", requestId: "tabs-1" }),
+    PairingProtocolError,
+  );
+  assert.throws(
+    () => reducePairingMessage(cancelled.state, {
+      type: "tabs_list_response",
+      ...identity("connection-a"),
+      request_id: "tabs-1",
+      tabs: [],
+    }),
+    PairingProtocolError,
+  );
   assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "nope" }), PairingProtocolError);
 });
 

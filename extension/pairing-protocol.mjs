@@ -70,17 +70,21 @@ function responseIdentity(binding, hostConnectionId) {
 }
 
 function normalizeTab(tab) {
+  // Tabs without IDs cannot later be targeted safely, so omit only that entry rather than fail the list.
+  if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !Number.isSafeInteger(tab?.windowId) || tab.windowId < 0) {
+    return null;
+  }
   const normalized = {
-    id: tab?.id,
-    window_id: tab?.windowId,
-    title: tab?.title,
-    url: tab?.url,
+    id: tab.id,
+    window_id: tab.windowId,
+    title: tab.title === undefined ? null : tab.title,
+    url: tab.url === undefined ? null : tab.url,
     active: tab?.active,
   };
-  if (!Number.isSafeInteger(normalized.id) || normalized.id < 0 ||
-    !Number.isSafeInteger(normalized.window_id) || normalized.window_id < 0 ||
-    typeof normalized.title !== "string" || normalized.title.length > 4_096 ||
-    typeof normalized.url !== "string" || normalized.url.length > 8_192 ||
+  if ((normalized.title !== null && typeof normalized.title !== "string") ||
+    (normalized.url !== null && typeof normalized.url !== "string") ||
+    (typeof normalized.title === "string" && normalized.title.length > 4_096) ||
+    (typeof normalized.url === "string" && normalized.url.length > 8_192) ||
     typeof normalized.active !== "boolean") fail();
   return normalized;
 }
@@ -159,7 +163,7 @@ export function respondToTabsList(message, binding, hostConnectionId, tabs) {
     type: "tabs_list_response",
     request_id: message.request_id,
     ...responseIdentity(binding, hostConnectionId),
-    tabs: tabs.map(normalizeTab),
+    tabs: tabs.map(normalizeTab).filter((tab) => tab !== null),
   });
 }
 

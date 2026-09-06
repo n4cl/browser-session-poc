@@ -127,7 +127,13 @@ test("active Extension correlates browser_status and tabs_list with its paired i
   const port = fakePort();
   const chrome = fakeChrome({
     ports: [port],
-    tabs: [{ id: 7, windowId: 3, title: "Example", url: "https://example.test/", active: true }],
+    tabs: [
+      { id: 7, windowId: 3, title: "Example", url: "https://example.test/", active: true },
+      { id: 8, windowId: 3, active: false },
+      { id: 9, windowId: 3, title: "", url: "", active: false },
+      { windowId: 3, title: "untargetable", url: "https://example.test/no-id", active: false },
+      { id: 10, title: "untargetable", url: "https://example.test/no-window", active: false },
+    ],
   });
   const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
   await controller.connect();
@@ -151,7 +157,11 @@ test("active Extension correlates browser_status and tabs_list with its paired i
     type: "tabs_list_response",
     request_id: "tabs-1",
     ...identity(),
-    tabs: [{ id: 7, window_id: 3, title: "Example", url: "https://example.test/", active: true }],
+    tabs: [
+      { id: 7, window_id: 3, title: "Example", url: "https://example.test/", active: true },
+      { id: 8, window_id: 3, title: null, url: null, active: false },
+      { id: 9, window_id: 3, title: "", url: "", active: false },
+    ],
   });
 
   port.emitMessage({ type: "tabs_list_request", request_id: "tabs-foreign", ...identity("other") });

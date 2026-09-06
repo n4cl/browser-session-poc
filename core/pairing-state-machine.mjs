@@ -1,6 +1,7 @@
 import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
 import {
   BROWSER_COMMANDS,
+  BROWSER_COMMAND_USED_REQUEST_ID_MAX,
   createBrowserCommandRequest,
   validateBrowserCommandResponse,
 } from "./browser-command-protocol.mjs";
@@ -173,6 +174,7 @@ export function createPairingState(descriptor) {
     usedConnectionIds: [],
     pendingRequestIds: [],
     pendingBrowserRequests: [],
+    usedBrowserRequestIds: [],
     expiresAt: Date.parse(descriptor.expires_at),
   };
 }
@@ -327,12 +329,17 @@ export function issueBrowserCommand(state, { command, requestId }) {
   if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !BROWSER_COMMANDS.includes(command)) {
     fail("browser command is not permitted in the current state");
   }
-  if (state.pendingRequestIds.includes(requestId) || state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) {
+  if (state.pendingRequestIds.includes(requestId) || state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId) ||
+    state.usedBrowserRequestIds.includes(requestId)) {
     fail("browser command request id is already pending");
   }
   const message = createBrowserCommandRequest({ command, requestId, binding: state.binding, connectionId: state.activeConnectionId });
+  if (state.usedBrowserRequestIds.length >= BROWSER_COMMAND_USED_REQUEST_ID_MAX) {
+    fail("browser command request id capacity is exhausted");
+  }
   return next(state, {
     pendingBrowserRequests: [...state.pendingBrowserRequests, { command, requestId }],
+    usedBrowserRequestIds: [...state.usedBrowserRequestIds, requestId],
   }, [{ type: "send", connectionId: state.activeConnectionId, message }]);
 }
 
