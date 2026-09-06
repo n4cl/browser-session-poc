@@ -122,6 +122,25 @@ export class PairingSocketServer {
     });
   }
 
+  /**
+   * PoC-only fault injection for an ACTIVE Native Host transport. The listener,
+   * descriptor, and every other instance remain available for that Host's resume.
+   */
+  disconnectActiveHost() {
+    this.#expireIfDue();
+    const connectionId = this.#state.activeConnectionId;
+    if (this.#state.phase !== "ACTIVE" || connectionId === null) {
+      throw new Error("an active host transport is required");
+    }
+    const connection = this.#connections.get(connectionId);
+    if (!connection || connection.closed) {
+      throw new Error("the active host transport is unavailable");
+    }
+
+    this.#disconnect(connection);
+    connection.socket.destroy();
+  }
+
   async listen() {
     if (this.#server !== null) {
       throw new Error("pairing socket server is already listening");
@@ -163,24 +182,7 @@ export class PairingSocketServer {
     const connection = { socket, connectionId: null, closed: false };
     this.#sockets.add(connection);
 
-    const disconnect = () => {
-      if (connection.closed) return;
-      connection.closed = true;
-      this.#sockets.delete(connection);
-      if (connection.connectionId !== null && this.#connections.get(connection.connectionId) === connection) {
-        this.#connections.delete(connection.connectionId);
-        const wasActive = this.#state.activeConnectionId === connection.connectionId;
-        this.#state = disconnectPairingConnection(this.#state, connection.connectionId).state;
-        if (wasActive) {
-          for (const requestId of [...this.#state.pendingRequestIds]) {
-            const cancelled = cancelPairingPing(this.#state, requestId);
-            this.#state = cancelled.state;
-            this.#applyEffects(cancelled.effects);
-          }
-        }
-      }
-    };
-    socket.on("close", disconnect);
+    socket.on("close", () => this.#disconnect(connection));
     socket.on("error", () => {});
     socket.on("data", (chunk) => {
       try {
@@ -192,6 +194,26 @@ export class PairingSocketServer {
         socket.destroy();
       }
     });
+  }
+
+  #disconnect(connection) {
+    if (connection.closed) return;
+    connection.closed = true;
+    this.#sockets.delete(connection);
+    if (connection.connectionId === null || this.#connections.get(connection.connectionId) !== connection) {
+      return;
+    }
+
+    this.#connections.delete(connection.connectionId);
+    const wasActive = this.#state.activeConnectionId === connection.connectionId;
+    this.#state = disconnectPairingConnection(this.#state, connection.connectionId).state;
+    if (wasActive) {
+      for (const requestId of [...this.#state.pendingRequestIds]) {
+        const cancelled = cancelPairingPing(this.#state, requestId);
+        this.#state = cancelled.state;
+        this.#applyEffects(cancelled.effects);
+      }
+    }
   }
 
   #handleMessage(connection, message) {

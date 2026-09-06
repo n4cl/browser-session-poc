@@ -36,6 +36,9 @@ test("pairing CLI reports status, rejects unknown commands, and closes once on q
       async requestPing() {
         throw new Error("no active pairing");
       },
+      disconnectActiveHost() {
+        throw new Error("an active host transport is required");
+      },
     },
     async close() {
       closeCalls += 1;
@@ -45,7 +48,7 @@ test("pairing CLI reports status, rejects unknown commands, and closes once on q
   const exitCode = await runPairingSession({
     argumentsList: ["start", "poc-a"],
     runtimeRoot: "/private/tmp/runtime",
-    lineReader: commands(["status", "ping", "unknown", "quit"]),
+    lineReader: commands(["status", "ping", "disconnect-active-host", "unknown", "quit"]),
     output,
     errorOutput,
     startHarness: async () => harness,
@@ -56,10 +59,38 @@ test("pairing CLI reports status, rejects unknown commands, and closes once on q
   assert.equal(closeCalls, 1);
   assert.equal(
     output.value(),
-    "ready poc-a ISSUED\nstatus poc-a ISSUED\nping failed\nerror unknown_command\n",
+    "ready poc-a ISSUED\nstatus poc-a ISSUED\nping failed\nhost disconnect rejected\nerror unknown_command\n",
   );
   assert.equal(errorOutput.value(), "");
   assert.equal(output.value().includes("request-secret-not-printed"), false);
+});
+
+test("pairing CLI disconnects only an active Host without printing its identity", async () => {
+  const output = writableCapture();
+  const errorOutput = writableCapture();
+  let disconnectCalls = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["disconnect-active-host", "quit"]),
+    output,
+    errorOutput,
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        disconnectActiveHost() {
+          disconnectCalls += 1;
+        },
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(disconnectCalls, 1);
+  assert.equal(output.value(), "ready poc-a ISSUED\nhost disconnected\n");
+  assert.equal(errorOutput.value(), "");
+  assert.equal(output.value().includes("connection"), false);
 });
 
 test("pairing CLI reports startup and cleanup failures without bypassing cleanup", async () => {
@@ -86,7 +117,11 @@ test("pairing CLI reports startup and cleanup failures without bypassing cleanup
     output: writableCapture(),
     errorOutput: cleanupErrors,
     startHarness: async () => ({
-      server: { state: { phase: "ISSUED" }, requestPing: async () => {} },
+      server: {
+        state: { phase: "ISSUED" },
+        requestPing: async () => {},
+        disconnectActiveHost() {},
+      },
       close: async () => {
         throw new Error("ownership changed");
       },

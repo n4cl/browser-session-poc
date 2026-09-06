@@ -52,4 +52,6 @@ ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。
 
 `npm run pairing -- start <instance-id>` は前景session harnessを開始する。起動時に既存claimを検出した場合は、記録済みprocess identityと全プロセス列挙で生きたharnessがいないことを確認してからのみ回収する。旧claim形式は、対応descriptorの期限切れ、socket接続不能、該当harnessプロセス不在の全条件が必要である。不明なclaim、descriptor、socket、process状態はfail-closedで保持する。
 
+前景harnessの標準入力で`disconnect-active-host`を送ると、そのinstanceのACTIVE Native Host transportだけを切断する。descriptor、listening socket、他instanceには作用せず、Extensionは同じbindingでresumeできる。このコマンドはA/B分離と再接続を検証するためのPoC用fault injectionであり、本番APIではない。ACTIVE接続がなければ拒否される。
+
 PoC harnessの既定leaseは1時間である。満了時はACTIVE状態でもREVOKEDになり、長期session向けのrenewalは未実装である。

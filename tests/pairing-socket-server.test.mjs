@@ -196,6 +196,76 @@ test("A and B sockets remain independent when B fails before A starts", async (t
   assert.equal((await aClient.next()).request_id, "a-still-active");
 });
 
+test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {
+  const a = await serverFixture("poc-a", "818181818181");
+  const b = await serverFixture("poc-b", "828282828282");
+  t.after(() => Promise.all([a.server.close(), b.server.close()]));
+  await Promise.all([a.server.listen(), b.server.listen()]);
+
+  const aClient = await framedClient(a.descriptor.socket_path);
+  const bClient = await framedClient(b.descriptor.socket_path);
+  t.after(() => aClient.socket.destroy());
+  t.after(() => bClient.socket.destroy());
+  await activateHostToSessionSocket(aClient, a.descriptor);
+  await activateHostToSessionSocket(bClient, b.descriptor);
+
+  const pendingPing = a.server.requestPing({ requestId: "a-pending", timeoutMs: 1_000 });
+  const pendingPingRejected = assert.rejects(pendingPing, /pairing ping was not completed/);
+  assert.equal((await aClient.next()).type, "ping_request");
+  const aClosed = once(aClient.socket, "close");
+  a.server.disconnectActiveHost();
+  await aClosed;
+  await pendingPingRejected;
+  assert.equal(a.server.state.phase, "ACTIVE");
+  assert.equal(a.server.state.activeConnectionId, null);
+  assert.throws(
+    () => a.server.requestPing({ requestId: "a-after-disconnect" }),
+    /ping is not permitted in the current state/,
+  );
+
+  bClient.send(encodeNativeMessage(message(b.descriptor, "transport_probe_request", "connection-a", {
+    request_id: "b-remains-active",
+  })));
+  assert.equal((await bClient.next()).request_id, "b-remains-active");
+});
+
+test("disconnect-active-host rejects before an ACTIVE transport exists", async (t) => {
+  const fixture = await serverFixture("poc-a", "838383838383");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+
+  assert.throws(() => fixture.server.disconnectActiveHost(), /an active host transport is required/);
+  assert.equal(fixture.server.state.phase, "ISSUED");
+});
+
+test("a disconnected active host can resume and serve a later ping", async (t) => {
+  const fixture = await serverFixture("poc-a", "848484848484");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+
+  const initial = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => initial.socket.destroy());
+  await activateHostToSessionSocket(initial, fixture.descriptor);
+  const initialClosed = once(initial.socket, "close");
+  fixture.server.disconnectActiveHost();
+  await initialClosed;
+
+  const resumed = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => resumed.socket.destroy());
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "resume", "connection-b")));
+  assert.equal((await resumed.next()).pairing_mode, "resume");
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-b")));
+  assert.equal((await resumed.next()).type, "pair_active");
+
+  const ping = fixture.server.requestPing({ requestId: "after-resume", timeoutMs: 1_000 });
+  const request = await resumed.next();
+  assert.equal(request.type, "ping_request");
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "ping_response", "connection-b", {
+    request_id: "after-resume",
+  })));
+  assert.deepEqual(await ping, { requestId: "after-resume" });
+});
+
 test("the idle expiry timer revokes an active session and fences its socket", async (t) => {
   let currentTime = new Date("2030-01-01T00:30:00.000Z");
   const timers = [];

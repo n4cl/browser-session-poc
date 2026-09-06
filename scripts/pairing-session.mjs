@@ -58,6 +58,13 @@ export async function runPairingSession({
         } catch {
           output.write("ping failed\n");
         }
+      } else if (line === "disconnect-active-host") {
+        try {
+          harness.server.disconnectActiveHost();
+          output.write("host disconnected\n");
+        } catch {
+          output.write("host disconnect rejected\n");
+        }
       } else if (line === "quit") {
         break;
       } else {
