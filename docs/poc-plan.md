@@ -145,6 +145,8 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 `browser_status`と`tabs_list`は、pairing済みのsession専用socketからactiveな`host_connection_id`へだけ送る。requestとresponseにはidentity tupleと`request_id`を必須とし、responseのidentity、connection、command、request IDが一致しなければ破棄してtransportをfenceする。`tabs_list`はExtensionの`chrome.tabs.query({})`で、そのExtensionが属するChrome profileのタブだけを取得する。
 
+手動検証では`npm run pairing -- start <instance-id>`の対話入力で`browser-status`と`tabs-list`を使う。各実行は新しいrequest IDと1,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。実機検証記録にはtitle、URLなどの実値を保存しない。
+
 この作業単位の入力・出力制約:
 
 - `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。同一generationでは発行済みのbrowser command request IDを再利用しない。timeout後の遅延responseはpendingでないためfence対象となる。

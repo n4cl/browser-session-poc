@@ -65,6 +65,82 @@ test("pairing CLI reports status, rejects unknown commands, and closes once on q
   assert.equal(output.value().includes("request-secret-not-printed"), false);
 });
 
+test("pairing CLI dispatches browser commands with fresh request IDs and prints only safe result JSON", async () => {
+  const output = writableCapture();
+  const errorOutput = writableCapture();
+  const requestIds = ["request-status", "request-tabs"];
+  const statusCalls = [];
+  const tabCalls = [];
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["browser-status", "tabs-list", "unknown", "quit"]),
+    output,
+    errorOutput,
+    createRequestId: () => requestIds.shift(),
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestBrowserStatus(options) {
+          statusCalls.push(options);
+          return {
+            generation: 3,
+            lease_id: "lease-must-not-print",
+            status: { extension_connected: true, chrome_tabs_available: true },
+          };
+        },
+        async requestTabsList(options) {
+          tabCalls.push(options);
+          return {
+            generation: 3,
+            lease_id: "lease-must-not-print",
+            tabs: [{ id: 4, window_id: 2, title: "Example", url: "https://example.test/", active: true }],
+          };
+        },
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(statusCalls, [{ requestId: "request-status", timeoutMs: 1_000 }]);
+  assert.deepEqual(tabCalls, [{ requestId: "request-tabs", timeoutMs: 1_000 }]);
+  assert.equal(output.value(), [
+    "ready poc-a ISSUED",
+    '{"command":"browser_status","generation":3,"status":{"extension_connected":true,"chrome_tabs_available":true}}',
+    '{"command":"tabs_list","generation":3,"tabs":[{"id":4,"window_id":2,"title":"Example","url":"https://example.test/","active":true}]}',
+    "error unknown_command",
+    "",
+  ].join("\n"));
+  assert.equal(output.value().includes("lease-must-not-print"), false);
+  assert.equal(errorOutput.value(), "");
+});
+
+test("pairing CLI reports browser command failures without exposing transport details and still cleans up", async () => {
+  const output = writableCapture();
+  let closeCalls = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["browser-status", "tabs-list", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestBrowserStatus() { throw new Error("lease-must-not-print"); },
+        async requestTabsList() { throw new Error("nonce-must-not-print"); },
+      },
+      async close() { closeCalls += 1; },
+    }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(closeCalls, 1);
+  assert.equal(output.value(), "ready poc-a ISSUED\nbrowser-status failed\ntabs-list failed\n");
+  assert.equal(output.value().includes("must-not-print"), false);
+});
+
 test("pairing CLI disconnects only an active Host without printing its identity", async () => {
   const output = writableCapture();
   const errorOutput = writableCapture();

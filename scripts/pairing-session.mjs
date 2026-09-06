@@ -58,6 +58,20 @@ export async function runPairingSession({
         } catch {
           output.write("ping failed\n");
         }
+      } else if (line === "browser-status") {
+        try {
+          const result = await harness.server.requestBrowserStatus({ requestId: createRequestId(), timeoutMs: 1_000 });
+          output.write(`${JSON.stringify({ command: "browser_status", generation: result.generation, status: result.status })}\n`);
+        } catch {
+          output.write("browser-status failed\n");
+        }
+      } else if (line === "tabs-list") {
+        try {
+          const result = await harness.server.requestTabsList({ requestId: createRequestId(), timeoutMs: 1_000 });
+          output.write(`${JSON.stringify({ command: "tabs_list", generation: result.generation, tabs: result.tabs })}\n`);
+        } catch {
+          output.write("tabs-list failed\n");
+        }
       } else if (line === "disconnect-active-host") {
         try {
           harness.server.disconnectActiveHost();
