@@ -7,6 +7,8 @@ import {
   disconnectPairingConnection,
   expirePairingState,
   issuePairingPing,
+  issueBrowserCommand,
+  cancelBrowserCommand,
   reducePairingMessage,
 } from "../core/pairing-state-machine.mjs";
 
@@ -143,6 +145,44 @@ test("issued pairing pings resolve only for the active identity and pending requ
   const resolved = reducePairingMessage(issued.state, { ...issued.effects[0].message, type: "ping_response" });
   assert.deepEqual(resolved.state.pendingRequestIds, []);
   assert.deepEqual(resolved.effects, [{ type: "ping_resolved", requestId: "request-ping" }]);
+});
+
+test("browser commands preserve identity, correlate responses, and reject timeout without retry", () => {
+  const issued = issueBrowserCommand(activeState(), { command: "browser_status", requestId: "status-1" });
+  assert.deepEqual(issued.effects[0].message, {
+    type: "browser_status_request",
+    ...identity("connection-a"),
+    request_id: "status-1",
+  });
+  assert.throws(
+    () => reducePairingMessage(issued.state, {
+      type: "browser_status_response",
+      ...identity("connection-a"),
+      request_id: "wrong-request",
+      status: { extension_connected: true, chrome_tabs_available: true },
+    }),
+    PairingProtocolError,
+  );
+  const completed = reducePairingMessage(issued.state, {
+    type: "browser_status_response",
+    ...identity("connection-a"),
+    request_id: "status-1",
+    status: { extension_connected: true, chrome_tabs_available: true },
+  });
+  assert.deepEqual(completed.effects, [{
+    type: "browser_resolved",
+    requestId: "status-1",
+    response: { ok: true, status: { extension_connected: true, chrome_tabs_available: true } },
+  }]);
+
+  const tabs = issueBrowserCommand(activeState(), { command: "tabs_list", requestId: "tabs-1" });
+  const cancelled = cancelBrowserCommand(tabs.state, "tabs-1");
+  assert.deepEqual(cancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "tabs-1",
+    response: { ok: false, errorCode: "timeout" },
+  }]);
+  assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "nope" }), PairingProtocolError);
 });
 
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {

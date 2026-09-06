@@ -8,6 +8,10 @@ import process from "node:process";
 import { GATE_1_EXTENSION_ORIGIN } from "../core/extension-id.mjs";
 import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION, PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "../core/pairing-protocol.mjs";
 import {
+  validateBrowserCommandRequest,
+  validateBrowserCommandResponse,
+} from "../core/browser-command-protocol.mjs";
+import {
   readActivePairingDescriptor,
   readProfileMetadata,
   resolvePairingPaths,
@@ -143,6 +147,32 @@ function assertPing(message, descriptor, hostConnectionId, type) {
   assertExactFields(message, ["type", "request_id", "protocol_version", ...PAIRING_IDENTITY_FIELDS, "host_connection_id"]);
   if (message.type !== type || !isNonEmptyString(message.request_id)) throw new Error("invalid pairing ping");
   assertIdentity(message, descriptor, hostConnectionId);
+}
+
+function assertExtensionRequest(message, descriptor, hostConnectionId) {
+  if (message?.type === "ping_request") {
+    assertPing(message, descriptor, hostConnectionId, "ping_request");
+    return;
+  }
+  validateBrowserCommandRequest(message, { binding: descriptor, connectionId: hostConnectionId });
+}
+
+function assertExtensionResponse(message, descriptor, hostConnectionId) {
+  if (message?.type === "ping_response") {
+    assertPing(message, descriptor, hostConnectionId, "ping_response");
+    return;
+  }
+  const command = message?.type === "browser_status_response"
+    ? "browser_status"
+    : message?.type === "tabs_list_response"
+      ? "tabs_list"
+      : message?.type === "browser_error_response" ? message.command : null;
+  validateBrowserCommandResponse(message, {
+    command,
+    requestId: message?.request_id,
+    binding: descriptor,
+    connectionId: hostConnectionId,
+  });
 }
 
 function nativeWrite(output, message) {
@@ -283,7 +313,7 @@ export async function runPairingNativeHost({
             try {
               while (phase === "ACTIVE") {
                 const request = await bridge.receive();
-                assertPing(request, descriptor, hostConnectionId, "ping_request");
+                assertExtensionRequest(request, descriptor, hostConnectionId);
                 nativeWrite(output, request);
               }
             } catch {
@@ -291,7 +321,7 @@ export async function runPairingNativeHost({
             }
           })();
         } else if (phase === "ACTIVE") {
-          assertPing(message, descriptor, hostConnectionId, "ping_response");
+          assertExtensionResponse(message, descriptor, hostConnectionId);
           bridge.send(message);
         } else {
           throw new Error("unexpected pairing protocol message");

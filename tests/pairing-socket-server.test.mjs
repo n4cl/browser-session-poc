@@ -140,6 +140,46 @@ test("native host-to-session socket transport accepts partial and multiple frame
   assert.deepEqual(await harnessPing, { requestId: "harness-ping" });
 });
 
+test("browser_status and tabs_list stay correlated to the active instance and expose timeout/error codes", async (t) => {
+  const fixture = await serverFixture("poc-a", "101010101010");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const status = fixture.server.requestBrowserStatus({ requestId: "status-1", timeoutMs: 1_000 });
+  assert.deepEqual(await client.next(), message(fixture.descriptor, "browser_status_request", "connection-a", { request_id: "status-1" }));
+  client.send(encodeNativeMessage(message(fixture.descriptor, "browser_status_response", "connection-a", {
+    request_id: "status-1",
+    status: { extension_connected: true, chrome_tabs_available: true },
+  })));
+  assert.deepEqual(await status, {
+    request_id: "status-1",
+    command: "browser_status",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.descriptor.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    status: { extension_connected: true, chrome_tabs_available: true },
+  });
+
+  const tabs = fixture.server.requestTabsList({ requestId: "tabs-1", timeoutMs: 1_000 });
+  assert.equal((await client.next()).type, "tabs_list_request");
+  client.send(encodeNativeMessage(message(fixture.descriptor, "browser_error_response", "connection-a", {
+    request_id: "tabs-1",
+    command: "tabs_list",
+    error_code: "tabs_unavailable",
+  })));
+  await assert.rejects(tabs, (error) => error.code === "tabs_unavailable");
+
+  const timeout = fixture.server.requestTabsList({ requestId: "tabs-timeout", timeoutMs: 1 });
+  assert.equal((await client.next()).request_id, "tabs-timeout");
+  await assert.rejects(timeout, (error) => error.code === "timeout");
+});
+
 test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {
   const fixture = await serverFixture("poc-a", "222222222222");
   t.after(() => fixture.server.close());

@@ -1,4 +1,9 @@
 import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
+import {
+  BROWSER_COMMANDS,
+  createBrowserCommandRequest,
+  validateBrowserCommandResponse,
+} from "./browser-command-protocol.mjs";
 
 export { PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
 
@@ -167,6 +172,7 @@ export function createPairingState(descriptor) {
     candidateKind: null,
     usedConnectionIds: [],
     pendingRequestIds: [],
+    pendingBrowserRequests: [],
     expiresAt: Date.parse(descriptor.expires_at),
   };
 }
@@ -212,6 +218,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
       const effects = [{ type: "send", connectionId, message: withActive(binding, connectionId) }];
       if (oldConnectionId !== null) {
         for (const requestId of state.pendingRequestIds) effects.push({ type: "ping_rejected", requestId });
+        for (const { requestId } of state.pendingBrowserRequests) effects.push({ type: "browser_rejected", requestId });
         effects.push({ type: "fence", connectionId: oldConnectionId });
       }
       return next(state, {
@@ -220,6 +227,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         candidateConnectionId: null,
         candidateKind: null,
         pendingRequestIds: oldConnectionId === null ? state.pendingRequestIds : [],
+        pendingBrowserRequests: oldConnectionId === null ? state.pendingBrowserRequests : [],
       }, effects);
     }
     case "resume": {
@@ -249,6 +257,30 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         { type: "ping_resolved", requestId: message.request_id },
       ]);
     }
+    case "browser_status_response":
+    case "tabs_list_response":
+    case "browser_error_response": {
+      if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
+        fail("browser command is not permitted in the current state");
+      }
+      const requestId = message?.request_id;
+      const pending = state.pendingBrowserRequests.find((candidate) => candidate.requestId === requestId);
+      if (!pending) fail("browser command response is not pending");
+      let response;
+      try {
+        response = validateBrowserCommandResponse(message, {
+          command: pending.command,
+          requestId: pending.requestId,
+          binding,
+          connectionId: state.activeConnectionId,
+        });
+      } catch {
+        fail("browser command response is invalid");
+      }
+      return next(state, {
+        pendingBrowserRequests: state.pendingBrowserRequests.filter((candidate) => candidate.requestId !== requestId),
+      }, [{ type: response.ok ? "browser_resolved" : "browser_rejected", requestId, response }]);
+    }
     case "transport_probe_request": {
       if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
         fail("ping is not permitted in the current state");
@@ -273,7 +305,9 @@ export function issuePairingPing(state, { requestId }) {
   if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !isNonEmptyString(requestId)) {
     fail("ping is not permitted in the current state");
   }
-  if (state.pendingRequestIds.includes(requestId)) fail("ping request id is already pending");
+  if (state.pendingRequestIds.includes(requestId) || state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) {
+    fail("ping request id is already pending");
+  }
   return next(state, { pendingRequestIds: [...state.pendingRequestIds, requestId] }, [{
     type: "send",
     connectionId: state.activeConnectionId,
@@ -286,6 +320,27 @@ export function cancelPairingPing(state, requestId) {
   return next(state, { pendingRequestIds: state.pendingRequestIds.filter((id) => id !== requestId) }, [
     { type: "ping_rejected", requestId },
   ]);
+}
+
+/** Issues a read-only Gate 3 browser command over the currently fenced active transport. */
+export function issueBrowserCommand(state, { command, requestId }) {
+  if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !BROWSER_COMMANDS.includes(command)) {
+    fail("browser command is not permitted in the current state");
+  }
+  if (state.pendingRequestIds.includes(requestId) || state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) {
+    fail("browser command request id is already pending");
+  }
+  const message = createBrowserCommandRequest({ command, requestId, binding: state.binding, connectionId: state.activeConnectionId });
+  return next(state, {
+    pendingBrowserRequests: [...state.pendingBrowserRequests, { command, requestId }],
+  }, [{ type: "send", connectionId: state.activeConnectionId, message }]);
+}
+
+export function cancelBrowserCommand(state, requestId) {
+  if (!state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) return next(state, {});
+  return next(state, {
+    pendingBrowserRequests: state.pendingBrowserRequests.filter((candidate) => candidate.requestId !== requestId),
+  }, [{ type: "browser_rejected", requestId, response: { ok: false, errorCode: "timeout" } }]);
 }
 
 /**

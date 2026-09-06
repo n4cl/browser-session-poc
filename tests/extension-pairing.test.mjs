@@ -50,7 +50,7 @@ function fakePort() {
   };
 }
 
-function fakeChrome({ storedBinding = undefined, ports = [] } = {}) {
+function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined } = {}) {
   const storage = storedBinding === undefined ? {} : { pairing_binding: storedBinding };
   const setCalls = [];
   const connectedNames = [];
@@ -77,6 +77,11 @@ function fakeChrome({ storedBinding = undefined, ports = [] } = {}) {
           },
         },
       },
+      ...(tabs === undefined ? {} : {
+        tabs: {
+          async query() { return tabs; },
+        },
+      }),
     },
   };
 }
@@ -116,6 +121,69 @@ test("initial pairing does not persist before pair_active and persists only the 
   port.emitMessage({ type: "ping_request", request_id: "request-a", ...identity() });
   await settle();
   assert.deepEqual(port.messages.at(-1), { type: "ping_response", request_id: "request-a", ...identity() });
+});
+
+test("active Extension correlates browser_status and tabs_list with its paired identity", async () => {
+  const port = fakePort();
+  const chrome = fakeChrome({
+    ports: [port],
+    tabs: [{ id: 7, windowId: 3, title: "Example", url: "https://example.test/", active: true }],
+  });
+  const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+
+  port.emitMessage({ type: "browser_status_request", request_id: "status-1", ...identity() });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), {
+    type: "browser_status_response",
+    request_id: "status-1",
+    ...identity(),
+    status: { extension_connected: true, chrome_tabs_available: true },
+  });
+
+  port.emitMessage({ type: "tabs_list_request", request_id: "tabs-1", ...identity() });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), {
+    type: "tabs_list_response",
+    request_id: "tabs-1",
+    ...identity(),
+    tabs: [{ id: 7, window_id: 3, title: "Example", url: "https://example.test/", active: true }],
+  });
+
+  port.emitMessage({ type: "tabs_list_request", request_id: "tabs-foreign", ...identity("other") });
+  await settle();
+  assert.equal(port.disconnected, true);
+});
+
+test("tabs_list returns an explicit error when its bounded socket response would be too large", async () => {
+  const port = fakePort();
+  const tabs = Array.from({ length: 20 }, (_, id) => ({
+    id,
+    windowId: 1,
+    title: "x".repeat(4_096),
+    url: `https://example.test/${id}`,
+    active: id === 0,
+  }));
+  const chrome = fakeChrome({ ports: [port], tabs });
+  const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+  port.emitMessage({ type: "tabs_list_request", request_id: "oversized", ...identity() });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), {
+    type: "browser_error_response",
+    request_id: "oversized",
+    ...identity(),
+    command: "tabs_list",
+    error_code: "response_too_large",
+  });
 });
 
 test("resume preserves its stored binding and malformed pair_active disconnects without saving", async () => {

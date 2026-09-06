@@ -1,4 +1,5 @@
 export const PAIRING_PROTOCOL_VERSION = 1;
+export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
 
 const BINDING_FIELDS = [
   "session_id",
@@ -47,6 +48,41 @@ function validateIdentity(message, binding) {
 
 function validateConnectionId(value) {
   if (!nonEmptyString(value)) fail();
+}
+
+function validateBrowserRequest(message, binding, hostConnectionId, command) {
+  exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id"]);
+  if (message.type !== `${command}_request` || !nonEmptyString(message.request_id) || message.request_id.length > 128) fail();
+  validateIdentity(message, binding);
+  validateConnectionId(message.host_connection_id);
+  if (message.host_connection_id !== hostConnectionId) fail();
+}
+
+function assertResponseSize(response) {
+  if (new TextEncoder().encode(JSON.stringify(response)).byteLength > BROWSER_COMMAND_RESPONSE_MAX_BYTES) {
+    throw new Error("browser command response exceeds transport limit");
+  }
+  return response;
+}
+
+function responseIdentity(binding, hostConnectionId) {
+  return { protocol_version: PAIRING_PROTOCOL_VERSION, ...binding, host_connection_id: hostConnectionId };
+}
+
+function normalizeTab(tab) {
+  const normalized = {
+    id: tab?.id,
+    window_id: tab?.windowId,
+    title: tab?.title,
+    url: tab?.url,
+    active: tab?.active,
+  };
+  if (!Number.isSafeInteger(normalized.id) || normalized.id < 0 ||
+    !Number.isSafeInteger(normalized.window_id) || normalized.window_id < 0 ||
+    typeof normalized.title !== "string" || normalized.title.length > 4_096 ||
+    typeof normalized.url !== "string" || normalized.url.length > 8_192 ||
+    typeof normalized.active !== "boolean") fail();
+  return normalized;
 }
 
 export function startPairing(binding) {
@@ -104,4 +140,37 @@ export function respondToPing(message, binding, hostConnectionId) {
   validateConnectionId(message.host_connection_id);
   if (message.host_connection_id !== hostConnectionId) fail();
   return { type: "ping_response", request_id: message.request_id, protocol_version: PAIRING_PROTOCOL_VERSION, ...binding, host_connection_id: message.host_connection_id };
+}
+
+export function respondToBrowserStatus(message, binding, hostConnectionId, { chromeTabsAvailable }) {
+  validateBrowserRequest(message, binding, hostConnectionId, "browser_status");
+  return assertResponseSize({
+    type: "browser_status_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    status: { extension_connected: true, chrome_tabs_available: Boolean(chromeTabsAvailable) },
+  });
+}
+
+export function respondToTabsList(message, binding, hostConnectionId, tabs) {
+  validateBrowserRequest(message, binding, hostConnectionId, "tabs_list");
+  if (!Array.isArray(tabs)) fail();
+  return assertResponseSize({
+    type: "tabs_list_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    tabs: tabs.map(normalizeTab),
+  });
+}
+
+export function respondToBrowserError(message, binding, hostConnectionId, command, errorCode) {
+  validateBrowserRequest(message, binding, hostConnectionId, command);
+  if (!nonEmptyString(errorCode) || errorCode.length > 128) fail();
+  return assertResponseSize({
+    type: "browser_error_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    command,
+    error_code: errorCode,
+  });
 }

@@ -8,9 +8,12 @@ import {
   expirePairingState,
   issuePairingPing,
   cancelPairingPing,
+  issueBrowserCommand,
+  cancelBrowserCommand,
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
 import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
+import { assertBrowserCommandTimeout } from "./browser-command-protocol.mjs";
 
 export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
@@ -75,6 +78,7 @@ export class PairingSocketServer {
   #clearTimer;
   #expiryTimer = null;
   #pendingPings = new Map();
+  #pendingBrowserCommands = new Map();
 
   constructor({
     paths,
@@ -120,6 +124,31 @@ export class PairingSocketServer {
       this.#pendingPings.set(requestId, { resolve, reject, timer });
       this.#applyEffects(transition.effects);
     });
+  }
+
+  /** Sends one correlated read-only browser request to this instance's active Extension only. */
+  requestBrowserCommand({ command, requestId, timeoutMs = 1_000 }) {
+    assertBrowserCommandTimeout(timeoutMs);
+    this.#expireIfDue();
+    const transition = issueBrowserCommand(this.#state, { command, requestId });
+    this.#state = transition.state;
+    return new Promise((resolve, reject) => {
+      const timer = this.#setTimer(() => {
+        const cancelled = cancelBrowserCommand(this.#state, requestId);
+        this.#state = cancelled.state;
+        this.#applyEffects(cancelled.effects);
+      }, timeoutMs);
+      this.#pendingBrowserCommands.set(requestId, { resolve, reject, timer, command });
+      this.#applyEffects(transition.effects);
+    });
+  }
+
+  requestBrowserStatus({ requestId, timeoutMs = 1_000 }) {
+    return this.requestBrowserCommand({ command: "browser_status", requestId, timeoutMs });
+  }
+
+  requestTabsList({ requestId, timeoutMs = 1_000 }) {
+    return this.requestBrowserCommand({ command: "tabs_list", requestId, timeoutMs });
   }
 
   /**
@@ -213,6 +242,7 @@ export class PairingSocketServer {
         this.#state = cancelled.state;
         this.#applyEffects(cancelled.effects);
       }
+      this.#cancelPendingBrowserCommands();
     }
   }
 
@@ -246,6 +276,30 @@ export class PairingSocketServer {
         }
         continue;
       }
+      if (effect.type === "browser_resolved" || effect.type === "browser_rejected") {
+        const pending = this.#pendingBrowserCommands.get(effect.requestId);
+        if (pending) {
+          this.#pendingBrowserCommands.delete(effect.requestId);
+          this.#clearTimer(pending.timer);
+          if (effect.type === "browser_resolved") {
+            pending.resolve({
+              request_id: effect.requestId,
+              command: pending.command,
+              session_id: this.#descriptor.session_id,
+              browser_instance_id: this.#descriptor.browser_instance_id,
+              profile_instance_id: this.#descriptor.profile_instance_id,
+              generation: this.#descriptor.generation,
+              lease_id: this.#descriptor.lease_id,
+              ...effect.response,
+            });
+          } else {
+            const error = new Error(`browser command failed: ${effect.response?.errorCode ?? "transport_closed"}`);
+            error.code = effect.response?.errorCode ?? "transport_closed";
+            pending.reject(error);
+          }
+        }
+        continue;
+      }
       const connection = this.#connections.get(effect.connectionId);
       if (!connection) {
         continue;
@@ -268,8 +322,17 @@ export class PairingSocketServer {
         this.#state = cancelled.state;
         this.#applyEffects(cancelled.effects);
       }
+      this.#cancelPendingBrowserCommands();
     }
     return this.#state.phase === "REVOKED";
+  }
+
+  #cancelPendingBrowserCommands() {
+    for (const requestId of [...this.#state.pendingBrowserRequests].map((request) => request.requestId)) {
+      const cancelled = cancelBrowserCommand(this.#state, requestId);
+      this.#state = cancelled.state;
+      this.#applyEffects(cancelled.effects);
+    }
   }
 
   #scheduleExpiry() {
@@ -314,6 +377,13 @@ export class PairingSocketServer {
       this.#pendingPings.delete(requestId);
       this.#clearTimer(pending.timer);
       pending.reject(new Error("pairing socket server closed"));
+    }
+    for (const [requestId, pending] of this.#pendingBrowserCommands) {
+      this.#pendingBrowserCommands.delete(requestId);
+      this.#clearTimer(pending.timer);
+      const error = new Error("browser command failed: transport_closed");
+      error.code = "transport_closed";
+      pending.reject(error);
     }
     for (const connection of this.#sockets) {
       connection.socket.destroy();

@@ -5,6 +5,9 @@ import {
   validatePairActive,
   validatePairChallenge,
   respondToPing,
+  respondToBrowserError,
+  respondToBrowserStatus,
+  respondToTabsList,
 } from "./pairing-protocol.mjs";
 import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
@@ -106,7 +109,38 @@ export function createPairingController({
         phase = "ACTIVE";
         retryAttempt = 0;
       } else if (phase === "ACTIVE") {
-        target.postMessage(respondToPing(message, binding, activeConnectionId));
+        if (message?.type === "ping_request") {
+          target.postMessage(respondToPing(message, binding, activeConnectionId));
+        } else if (message?.type === "browser_status_request") {
+          target.postMessage(respondToBrowserStatus(message, binding, activeConnectionId, {
+            chromeTabsAvailable: typeof chromeApi.tabs?.query === "function",
+          }));
+        } else if (message?.type === "tabs_list_request") {
+          if (typeof chromeApi.tabs?.query !== "function") {
+            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "tabs_list", "tabs_unavailable"));
+          } else {
+            let response;
+            try {
+              const tabs = await chromeApi.tabs.query({});
+              if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              response = respondToTabsList(message, binding, activeConnectionId, tabs);
+            } catch (error) {
+              if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              response = respondToBrowserError(
+                message,
+                binding,
+                activeConnectionId,
+                "tabs_list",
+                error instanceof Error && error.message === "browser command response exceeds transport limit"
+                  ? "response_too_large"
+                  : "tabs_unavailable",
+              );
+            }
+            target.postMessage(response);
+          }
+        } else {
+          throw new Error("unexpected active protocol message");
+        }
       } else {
         throw new Error("unexpected pairing message");
       }

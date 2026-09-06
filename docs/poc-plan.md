@@ -131,6 +131,8 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 3: 最小browser tool
 
+進捗: **実装中**（2026-09-07）。最初の作業単位として`browser_status`と`tabs_list`を実装し、Node.jsの自動テストでidentity/generation/connection fencing、request/response相関、timeout/error、A/B socket分離を検証した。実Chromeでのタブ取得はGate 3全体の残作業と合わせて別途記録する。
+
 実装順:
 
 1. `browser_status`
@@ -140,6 +142,14 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 5. `click`
 6. `type`
 7. 必要な場合だけ`screenshot`
+
+`browser_status`と`tabs_list`は、pairing済みのsession専用socketからactiveな`host_connection_id`へだけ送る。requestとresponseにはidentity tupleと`request_id`を必須とし、responseのidentity、connection、command、request IDが一致しなければ破棄してtransportをfenceする。`tabs_list`はExtensionの`chrome.tabs.query({})`で、そのExtensionが属するChrome profileのタブだけを取得する。
+
+この作業単位の入力・出力制約:
+
+- `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。
+- session socket上のbrowser command responseは64 KiB以下とし、タブは`id`、`window_id`、`title`、`url`、`active`だけを返す。
+- `tabs` APIを利用できない場合と応答過大時は明示的なerror codeで失敗し、timeout時にcommandを自動再送しない。
 
 合格条件:
 
