@@ -131,7 +131,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 3: 最小browser tool
 
-進捗: **実装中**（2026-09-07）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。次の作業単位である`navigate`は自動テストまで実装済みであり、実Chrome試験は未実施である。`snapshot`以降は未実装のため、Gate 3全体は引き続き実装中とする。
+進捗: **実装中**（2026-09-07）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`も自動テストとA/B近接並行の実Chrome試験でこの作業単位の合格を確認した（[Gate 3 navigate実機試験結果](./gate-3-navigate-results.md)）。`snapshot`以降は未実装のため、Gate 3全体は引き続き実装中とする。
 
 実装順:
 
