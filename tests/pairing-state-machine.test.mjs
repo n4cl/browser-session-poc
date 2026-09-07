@@ -220,7 +220,7 @@ test("navigate canonicalizes an exact safe target, correlates its tab, and marks
   const navigation = issueBrowserCommand(status.state, {
     command: "navigate",
     requestId: "navigate-1",
-    target: { tabId: 7, url: "https:example.test/next" },
+    target: { tabId: 7, url: "https:example.test/next%20page" },
   });
   assert.equal(navigation.state.pendingBrowserRequests.length, 2);
   assert.deepEqual(navigation.effects[0].message, {
@@ -228,7 +228,7 @@ test("navigate canonicalizes an exact safe target, correlates its tab, and marks
     ...identity("connection-a"),
     request_id: "navigate-1",
     tab_id: 7,
-    url: "https://example.test/next",
+    url: "https://example.test/next%20page",
   });
   assert.throws(
     () => reducePairingMessage(navigation.state, {
@@ -285,6 +285,8 @@ test("navigate canonicalizes an exact safe target, correlates its tab, and marks
     { tabId: 7, url: "ftp://example.test/" },
     { tabId: 7, url: "https://user:password@example.test/" },
     { tabId: 7, url: "https://example.test/ " },
+    { tabId: 7, url: "https://example.test/internal space" },
+    { tabId: 7, url: "https://example.test/internal\u00a0space" },
     { tabId: 7, url: "https://example.test/\tpath" },
     { tabId: 7, url: "https://example.test/\npath" },
     { tabId: 7, url: "x".repeat(8_193) },

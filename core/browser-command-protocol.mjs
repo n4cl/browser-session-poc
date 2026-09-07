@@ -45,7 +45,7 @@ function assertRequestId(requestId) {
 export function validateNavigateTarget({ tabId, url }) {
   if (!Number.isSafeInteger(tabId) || tabId < 0) fail("navigate tab id is invalid");
   if (typeof url !== "string" || url.length === 0 || url.length > NAVIGATE_URL_MAX_LENGTH ||
-    url.trim() !== url || /[\u0000-\u001F\u007F]/.test(url)) {
+    url.trim() !== url || /[\u0000-\u001F\u007F]/.test(url) || /\s/u.test(url)) {
     fail("navigate URL is invalid");
   }
   let parsed;

@@ -27,15 +27,16 @@ test("pairing CLI accepts only an explicit start instance command", () => {
 });
 
 test("pairing CLI parses navigate arguments strictly and canonicalizes accepted URLs", () => {
-  assert.deepEqual(parseInteractiveCommand("navigate 7 https:example.test/path"), {
+  assert.deepEqual(parseInteractiveCommand("navigate 7 https:example.test/path%20with-encoding"), {
     type: "navigate",
     tabId: 7,
-    url: "https://example.test/path",
+    url: "https://example.test/path%20with-encoding",
   });
   for (const command of [
     "navigate", "navigate 7", "navigate -1 https://example.test/", "navigate 07 https://example.test/",
     "navigate 7 https://example.test/ extra", "navigate unsafe https://example.test/", "navigate 7 file:///private/tmp/x",
     "navigate 7 https://user:password@example.test/", "navigate 7 https://example.test/\tpath",
+    "navigate 7 https://example.test/internal\u00a0space",
     `navigate 7 https:example.test/${"a".repeat(8_173)}`,
   ]) {
     assert.equal(parseInteractiveCommand(command), null);

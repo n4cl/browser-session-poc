@@ -152,7 +152,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 - `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。同一generationでは発行済みのbrowser command request IDを再利用しない。timeout後の遅延responseはpendingでないためfence対象となる。
 - session socket上のbrowser command responseは64 KiB以下とし、タブは`id`、`window_id`、`title`、`url`、`active`だけを返す。`title`と`url`は`string | null`で、Chrome APIが`undefined`を返したときだけ`null`に正規化する。操作対象にできない`id`または`windowId`のタブは、そのタブだけを一覧から除外する。
 - `tabs` APIを利用できない場合と応答過大時は明示的なerror codeで失敗し、timeout時にcommandを自動再送しない。
-- `navigate`は非負safe integerの明示`tab_id`と、8,192 JavaScript文字以下の`http`/`https`絶対URLだけを受ける。ASCII制御文字、URL中のusername/password、空白、他schemeは拒否する。URL parserの`href`へcanonical化し、そのcanonical URLも同じ8,192文字上限で再検証してからcore requestと`chrome.tabs.update`の両方に用いる。通常のerrorや記録へURL・認証情報を出さない。Extensionはそのprofile内で`chrome.tabs.get`によりtabの存在を確認してから`chrome.tabs.update(tab_id, { url })`を呼ぶ。tab未検出は`tab_not_found`、Chrome API失敗は`navigation_failed`だけを返す。
+- `navigate`は非負safe integerの明示`tab_id`と、8,192 JavaScript文字以下の`http`/`https`絶対URLだけを受ける。ASCII制御文字、位置を問わないUnicode whitespace、URL中のusername/password、他schemeは拒否する（`%20`などpercent-encoding済みの表現は許可）。URL parserの`href`へcanonical化し、そのcanonical URLも同じ8,192文字上限で再検証してからcore requestと`chrome.tabs.update`の両方に用いる。通常のerrorや記録へURL・認証情報を出さない。Extensionはそのprofile内で`chrome.tabs.get`によりtabの存在を確認してから`chrome.tabs.update(tab_id, { url })`を呼ぶ。tab未検出は`tab_not_found`、Chrome API失敗は`navigation_failed`だけを返す。
 - `navigate`はmutationであるため、timeoutまたはtransport喪失時の結果は`outcome_unknown`とし、自動retryしない。responseはrequestのtab IDを含めて相関し、遅延responseはfenceされる。
 - PoCでは遅延responseとの衝突を避けるため、generationごとに最大4,096件のbrowser command request IDを保持する。この上限に達したgenerationは新規commandを拒否する。
 
