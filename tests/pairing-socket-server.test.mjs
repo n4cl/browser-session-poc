@@ -175,6 +175,47 @@ test("browser_status and tabs_list stay correlated to the active instance and ex
   })));
   await assert.rejects(tabs, (error) => error.code === "tabs_unavailable");
 
+  const navigation = fixture.server.requestNavigate({
+    requestId: "navigate-1",
+    tabId: 7,
+    url: "https://example.test/next",
+    timeoutMs: 1_000,
+  });
+  assert.deepEqual(await client.next(), message(fixture.descriptor, "navigate_request", "connection-a", {
+    request_id: "navigate-1",
+    tab_id: 7,
+    url: "https://example.test/next",
+  }));
+  client.send(encodeNativeMessage(message(fixture.descriptor, "navigate_response", "connection-a", {
+    request_id: "navigate-1",
+    tab_id: 7,
+  })));
+  assert.deepEqual(await navigation, {
+    request_id: "navigate-1",
+    command: "navigate",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.descriptor.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    tab_id: 7,
+    accepted: true,
+  });
+
+  const navigationTimeout = fixture.server.requestNavigate({
+    requestId: "navigate-timeout",
+    tabId: 7,
+    url: "https://example.test/",
+    timeoutMs: 1,
+  });
+  assert.equal((await client.next()).request_id, "navigate-timeout");
+  await assert.rejects(navigationTimeout, (error) => error.code === "outcome_unknown");
+  assert.throws(
+    () => fixture.server.requestNavigate({ requestId: "navigate-timeout", tabId: 7, url: "https://example.test/", timeoutMs: 1 }),
+    /request id is already pending/,
+  );
+
   const timeout = fixture.server.requestTabsList({ requestId: "tabs-timeout", timeoutMs: 1 });
   assert.equal((await client.next()).request_id, "tabs-timeout");
   await assert.rejects(timeout, (error) => error.code === "timeout");
@@ -244,6 +285,37 @@ test("A and B sockets remain independent when B fails before A starts", async (t
 
   aClient.send(encodeNativeMessage(message(a.descriptor, "transport_probe_request", "connection-a", { request_id: "a-still-active" })));
   assert.equal((await aClient.next()).request_id, "a-still-active");
+});
+
+test("concurrent A and B navigate requests remain on their descriptor-selected sockets", async (t) => {
+  const a = await serverFixture("poc-a", "616161616161");
+  const b = await serverFixture("poc-b", "626262626262");
+  t.after(() => Promise.all([a.server.close(), b.server.close()]));
+  await Promise.all([a.server.listen(), b.server.listen()]);
+  const aClient = await framedClient(a.descriptor.socket_path);
+  const bClient = await framedClient(b.descriptor.socket_path);
+  t.after(() => aClient.socket.destroy());
+  t.after(() => bClient.socket.destroy());
+  await Promise.all([
+    activateHostToSessionSocket(aClient, a.descriptor),
+    activateHostToSessionSocket(bClient, b.descriptor),
+  ]);
+
+  const aNavigation = a.server.requestNavigate({ requestId: "navigate-a", tabId: 7, url: "https://a.example.test/" });
+  const bNavigation = b.server.requestNavigate({ requestId: "navigate-b", tabId: 8, url: "https://b.example.test/" });
+  assert.deepEqual(await aClient.next(), message(a.descriptor, "navigate_request", "connection-a", {
+    request_id: "navigate-a", tab_id: 7, url: "https://a.example.test/",
+  }));
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "navigate_request", "connection-a", {
+    request_id: "navigate-b", tab_id: 8, url: "https://b.example.test/",
+  }));
+  aClient.send(encodeNativeMessage(message(a.descriptor, "navigate_response", "connection-a", { request_id: "navigate-a", tab_id: 7 })));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "navigate_response", "connection-a", { request_id: "navigate-b", tab_id: 8 })));
+  const [aResult, bResult] = await Promise.all([aNavigation, bNavigation]);
+  assert.equal(aResult.tab_id, 7);
+  assert.equal(bResult.tab_id, 8);
+  assert.equal(aResult.browser_instance_id, a.descriptor.browser_instance_id);
+  assert.equal(bResult.browser_instance_id, b.descriptor.browser_instance_id);
 });
 
 test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {

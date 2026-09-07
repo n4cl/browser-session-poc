@@ -166,6 +166,8 @@ function assertExtensionResponse(message, descriptor, hostConnectionId) {
     ? "browser_status"
     : message?.type === "tabs_list_response"
       ? "tabs_list"
+      : message?.type === "navigate_response"
+        ? "navigate"
       : message?.type === "browser_error_response" ? message.command : null;
   validateBrowserCommandResponse(message, {
     command,

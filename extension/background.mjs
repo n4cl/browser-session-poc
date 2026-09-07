@@ -8,6 +8,8 @@ import {
   respondToBrowserError,
   respondToBrowserStatus,
   respondToTabsList,
+  respondToNavigate,
+  validateNavigateRequest,
 } from "./pairing-protocol.mjs";
 import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
@@ -137,6 +139,28 @@ export function createPairingController({
               );
             }
             target.postMessage(response);
+          }
+        } else if (message?.type === "navigate_request") {
+          const navigation = validateNavigateRequest(message, binding, activeConnectionId);
+          if (typeof chromeApi.tabs?.get !== "function" || typeof chromeApi.tabs?.update !== "function") {
+            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed"));
+          } else {
+            try {
+              await chromeApi.tabs.get(navigation.tabId);
+            } catch {
+              if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "tab_not_found"));
+              return;
+            }
+            try {
+              await chromeApi.tabs.update(navigation.tabId, { url: navigation.url });
+            } catch {
+              if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed"));
+              return;
+            }
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            target.postMessage(respondToNavigate(message, binding, activeConnectionId, navigation.tabId));
           }
         } else {
           throw new Error("unexpected active protocol message");

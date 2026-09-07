@@ -1,5 +1,6 @@
 export const PAIRING_PROTOCOL_VERSION = 1;
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
+export const NAVIGATE_URL_MAX_LENGTH = 8_192;
 
 const BINDING_FIELDS = [
   "session_id",
@@ -50,12 +51,27 @@ function validateConnectionId(value) {
   if (!nonEmptyString(value)) fail();
 }
 
+function validateNavigateTarget({ tabId, url }) {
+  if (!Number.isSafeInteger(tabId) || tabId < 0 || typeof url !== "string" || url.length === 0 ||
+    url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url) fail();
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    fail();
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username !== "" || parsed.password !== "") fail();
+  return { tabId, url };
+}
+
 function validateBrowserRequest(message, binding, hostConnectionId, command) {
-  exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id"]);
+  const extraFields = command === "navigate" ? ["tab_id", "url"] : [];
+  exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id", ...extraFields]);
   if (message.type !== `${command}_request` || !nonEmptyString(message.request_id) || message.request_id.length > 128) fail();
   validateIdentity(message, binding);
   validateConnectionId(message.host_connection_id);
   if (message.host_connection_id !== hostConnectionId) fail();
+  return command === "navigate" ? validateNavigateTarget({ tabId: message.tab_id, url: message.url }) : undefined;
 }
 
 function assertResponseSize(response) {
@@ -164,6 +180,21 @@ export function respondToTabsList(message, binding, hostConnectionId, tabs) {
     request_id: message.request_id,
     ...responseIdentity(binding, hostConnectionId),
     tabs: tabs.map(normalizeTab).filter((tab) => tab !== null),
+  });
+}
+
+export function validateNavigateRequest(message, binding, hostConnectionId) {
+  return validateBrowserRequest(message, binding, hostConnectionId, "navigate");
+}
+
+export function respondToNavigate(message, binding, hostConnectionId, tabId) {
+  const target = validateNavigateRequest(message, binding, hostConnectionId);
+  if (tabId !== target.tabId) fail();
+  return assertResponseSize({
+    type: "navigate_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    tab_id: tabId,
   });
 }
 

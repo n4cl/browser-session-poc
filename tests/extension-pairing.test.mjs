@@ -50,7 +50,7 @@ function fakePort() {
   };
 }
 
-function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined } = {}) {
+function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined } = {}) {
   const storage = storedBinding === undefined ? {} : { pairing_binding: storedBinding };
   const setCalls = [];
   const connectedNames = [];
@@ -77,9 +77,21 @@ function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined } 
           },
         },
       },
-      ...(tabs === undefined ? {} : {
+      ...(tabs === undefined && tabGet === undefined && tabUpdate === undefined ? {} : {
         tabs: {
           async query() { return tabs; },
+          async get(tabId) {
+            if (tabGet) return tabGet(tabId);
+            const tab = tabs?.find((candidate) => candidate.id === tabId);
+            if (!tab) throw new Error("tab unavailable");
+            return tab;
+          },
+          async update(tabId, properties) {
+            if (tabUpdate) return tabUpdate(tabId, properties);
+            const tab = tabs?.find((candidate) => candidate.id === tabId);
+            if (!tab) throw new Error("tab unavailable");
+            return { ...tab, ...properties };
+          },
         },
       }),
     },
@@ -194,6 +206,69 @@ test("tabs_list returns an explicit error when its bounded socket response would
     command: "tabs_list",
     error_code: "response_too_large",
   });
+});
+
+test("navigate verifies a local tab, accepts only the paired request, and returns fixed Chrome error codes", async () => {
+  const port = fakePort();
+  const updates = [];
+  const chrome = fakeChrome({
+    ports: [port],
+    tabs: [{ id: 7, windowId: 3, title: "Example", url: "https://example.test/", active: true }],
+    tabUpdate(tabId, properties) {
+      updates.push({ tabId, properties });
+      return { id: tabId, ...properties };
+    },
+  });
+  const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-1", ...identity(), tab_id: 7, url: "https://example.test/next" });
+  await settle();
+  assert.deepEqual(updates, [{ tabId: 7, properties: { url: "https://example.test/next" } }]);
+  assert.deepEqual(port.messages.at(-1), { type: "navigate_response", request_id: "navigate-1", ...identity(), tab_id: 7 });
+
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-missing", ...identity(), tab_id: 8, url: "https://example.test/" });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), {
+    type: "browser_error_response",
+    request_id: "navigate-missing",
+    ...identity(),
+    command: "navigate",
+    error_code: "tab_not_found",
+  });
+
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-invalid", ...identity(), tab_id: 7, url: "https://user:password@example.test/" });
+  await settle();
+  assert.equal(port.disconnected, true);
+});
+
+test("navigate reports navigation_failed without exposing Chrome API errors", async () => {
+  const port = fakePort();
+  const chrome = fakeChrome({
+    ports: [port],
+    tabs: [{ id: 7, windowId: 3, title: "Example", url: "https://example.test/", active: true }],
+    tabUpdate() { throw new Error("Chrome API detail must not cross the protocol"); },
+  });
+  const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-failed", ...identity(), tab_id: 7, url: "https://example.test/" });
+  await settle();
+  assert.deepEqual(port.messages.at(-1), {
+    type: "browser_error_response",
+    request_id: "navigate-failed",
+    ...identity(),
+    command: "navigate",
+    error_code: "navigation_failed",
+  });
+  assert.equal(JSON.stringify(port.messages.at(-1)).includes("Chrome API detail"), false);
 });
 
 test("resume preserves its stored binding and malformed pair_active disconnects without saving", async () => {

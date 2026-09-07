@@ -214,6 +214,83 @@ test("browser commands preserve identity, correlate responses, and reject timeou
   assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "nope" }), PairingProtocolError);
 });
 
+test("navigate has an exact safe target schema, correlates its tab, and marks timeout outcome unknown", () => {
+  const active = activeState();
+  const status = issueBrowserCommand(active, { command: "browser_status", requestId: "status-concurrent" });
+  const navigation = issueBrowserCommand(status.state, {
+    command: "navigate",
+    requestId: "navigate-1",
+    target: { tabId: 7, url: "https://example.test/next" },
+  });
+  assert.equal(navigation.state.pendingBrowserRequests.length, 2);
+  assert.deepEqual(navigation.effects[0].message, {
+    type: "navigate_request",
+    ...identity("connection-a"),
+    request_id: "navigate-1",
+    tab_id: 7,
+    url: "https://example.test/next",
+  });
+  assert.throws(
+    () => reducePairingMessage(navigation.state, {
+      type: "navigate_response",
+      ...identity("connection-a"),
+      request_id: "navigate-1",
+      tab_id: 8,
+    }),
+    PairingProtocolError,
+  );
+  const accepted = reducePairingMessage(navigation.state, {
+    type: "navigate_response",
+    ...identity("connection-a"),
+    request_id: "navigate-1",
+    tab_id: 7,
+  });
+  assert.deepEqual(accepted.effects, [{
+    type: "browser_resolved",
+    requestId: "navigate-1",
+    response: { ok: true, tab_id: 7, accepted: true },
+  }]);
+
+  const timedOut = issueBrowserCommand(activeState(), {
+    command: "navigate",
+    requestId: "navigate-timeout",
+    target: { tabId: 7, url: "https://example.test/" },
+  });
+  const cancelled = cancelBrowserCommand(timedOut.state, "navigate-timeout");
+  assert.deepEqual(cancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "navigate-timeout",
+    response: { ok: false, errorCode: "outcome_unknown" },
+  }]);
+  assert.throws(
+    () => issueBrowserCommand(cancelled.state, {
+      command: "navigate",
+      requestId: "navigate-timeout",
+      target: { tabId: 7, url: "https://example.test/" },
+    }),
+    PairingProtocolError,
+  );
+  assert.throws(
+    () => reducePairingMessage(cancelled.state, {
+      type: "navigate_response",
+      ...identity("connection-a"),
+      request_id: "navigate-timeout",
+      tab_id: 7,
+    }),
+    PairingProtocolError,
+  );
+
+  for (const target of [
+    { tabId: -1, url: "https://example.test/" },
+    { tabId: 7, url: "ftp://example.test/" },
+    { tabId: 7, url: "https://user:password@example.test/" },
+    { tabId: 7, url: "https://example.test/ " },
+    { tabId: 7, url: "x".repeat(8_193) },
+  ]) {
+    assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "invalid-target", target }), PairingProtocolError);
+  }
+});
+
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {
   const boundary = new Date(descriptor.expires_at);
   const issued = expirePairingState(createPairingState(descriptor), boundary);

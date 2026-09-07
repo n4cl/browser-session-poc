@@ -261,6 +261,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
     }
     case "browser_status_response":
     case "tabs_list_response":
+    case "navigate_response":
     case "browser_error_response": {
       if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
         fail("browser command is not permitted in the current state");
@@ -275,6 +276,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
           requestId: pending.requestId,
           binding,
           connectionId: state.activeConnectionId,
+          target: pending.target,
         });
       } catch {
         fail("browser command response is invalid");
@@ -324,8 +326,8 @@ export function cancelPairingPing(state, requestId) {
   ]);
 }
 
-/** Issues a read-only Gate 3 browser command over the currently fenced active transport. */
-export function issueBrowserCommand(state, { command, requestId }) {
+/** Issues one Gate 3 browser command over the currently fenced active transport. */
+export function issueBrowserCommand(state, { command, requestId, target = undefined }) {
   if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !BROWSER_COMMANDS.includes(command)) {
     fail("browser command is not permitted in the current state");
   }
@@ -333,21 +335,31 @@ export function issueBrowserCommand(state, { command, requestId }) {
     state.usedBrowserRequestIds.includes(requestId)) {
     fail("browser command request id is already pending");
   }
-  const message = createBrowserCommandRequest({ command, requestId, binding: state.binding, connectionId: state.activeConnectionId });
+  let message;
+  try {
+    message = createBrowserCommandRequest({ command, requestId, binding: state.binding, connectionId: state.activeConnectionId, target });
+  } catch {
+    fail("browser command target is invalid");
+  }
   if (state.usedBrowserRequestIds.length >= BROWSER_COMMAND_USED_REQUEST_ID_MAX) {
     fail("browser command request id capacity is exhausted");
   }
   return next(state, {
-    pendingBrowserRequests: [...state.pendingBrowserRequests, { command, requestId }],
+    pendingBrowserRequests: [...state.pendingBrowserRequests, { command, requestId, target }],
     usedBrowserRequestIds: [...state.usedBrowserRequestIds, requestId],
   }, [{ type: "send", connectionId: state.activeConnectionId, message }]);
 }
 
 export function cancelBrowserCommand(state, requestId) {
-  if (!state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) return next(state, {});
+  const pending = state.pendingBrowserRequests.find((candidate) => candidate.requestId === requestId);
+  if (!pending) return next(state, {});
   return next(state, {
     pendingBrowserRequests: state.pendingBrowserRequests.filter((candidate) => candidate.requestId !== requestId),
-  }, [{ type: "browser_rejected", requestId, response: { ok: false, errorCode: "timeout" } }]);
+  }, [{
+    type: "browser_rejected",
+    requestId,
+    response: { ok: false, errorCode: pending.command === "navigate" ? "outcome_unknown" : "timeout" },
+  }]);
 }
 
 /**

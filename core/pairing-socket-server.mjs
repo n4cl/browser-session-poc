@@ -126,11 +126,11 @@ export class PairingSocketServer {
     });
   }
 
-  /** Sends one correlated read-only browser request to this instance's active Extension only. */
-  requestBrowserCommand({ command, requestId, timeoutMs = 1_000 }) {
+  /** Sends one correlated browser request to this instance's active Extension only. */
+  requestBrowserCommand({ command, requestId, target = undefined, timeoutMs = 1_000 }) {
     assertBrowserCommandTimeout(timeoutMs);
     this.#expireIfDue();
-    const transition = issueBrowserCommand(this.#state, { command, requestId });
+    const transition = issueBrowserCommand(this.#state, { command, requestId, target });
     this.#state = transition.state;
     return new Promise((resolve, reject) => {
       const timer = this.#setTimer(() => {
@@ -149,6 +149,10 @@ export class PairingSocketServer {
 
   requestTabsList({ requestId, timeoutMs = 1_000 }) {
     return this.requestBrowserCommand({ command: "tabs_list", requestId, timeoutMs });
+  }
+
+  requestNavigate({ requestId, tabId, url, timeoutMs = 1_000 }) {
+    return this.requestBrowserCommand({ command: "navigate", requestId, target: { tabId, url }, timeoutMs });
   }
 
   /**

@@ -131,7 +131,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 3: 最小browser tool
 
-進捗: **実装中**（2026-09-07）。最初の作業単位として`browser_status`と`tabs_list`を実装し、Node.jsの自動テストでidentity/generation/connection fencing、request/response相関、timeout/error、A/B socket分離を検証した。A/B交互実行を含む実Chrome試験でこの作業単位の合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`以降は未実装のため、Gate 3全体は引き続き実装中とする。
+進捗: **実装中**（2026-09-07）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。次の作業単位である`navigate`は自動テストまで実装済みであり、実Chrome試験は未実施である。`snapshot`以降は未実装のため、Gate 3全体は引き続き実装中とする。
 
 実装順:
 
@@ -145,13 +145,15 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 `browser_status`と`tabs_list`は、pairing済みのsession専用socketからactiveな`host_connection_id`へだけ送る。requestとresponseにはidentity tupleと`request_id`を必須とし、responseのidentity、connection、command、request IDが一致しなければ破棄してtransportをfenceする。`tabs_list`はExtensionの`chrome.tabs.query({})`で、そのExtensionが属するChrome profileのタブだけを取得する。
 
-手動検証では`npm run pairing -- start <instance-id>`の対話入力で`browser-status`と`tabs-list`を使う。各実行は新しいrequest IDと1,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。実機検証記録にはtitle、URLなどの実値を保存しない。
+手動検証では`npm run pairing -- start <instance-id>`の対話入力で`browser-status`、`tabs-list`、`navigate <tab-id> <url>`を使う。各実行は新しいrequest IDと1,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。`navigate`の成功は`chrome.tabs.update`がrequestを受理したことだけを示し、page load完了を保証しない。実機検証記録にはtitle、URLなどの実値を保存しない。
 
 この作業単位の入力・出力制約:
 
 - `request_id`は空白なし・128文字以下、command timeoutは1〜30,000 msとする。同一generationでは発行済みのbrowser command request IDを再利用しない。timeout後の遅延responseはpendingでないためfence対象となる。
 - session socket上のbrowser command responseは64 KiB以下とし、タブは`id`、`window_id`、`title`、`url`、`active`だけを返す。`title`と`url`は`string | null`で、Chrome APIが`undefined`を返したときだけ`null`に正規化する。操作対象にできない`id`または`windowId`のタブは、そのタブだけを一覧から除外する。
 - `tabs` APIを利用できない場合と応答過大時は明示的なerror codeで失敗し、timeout時にcommandを自動再送しない。
+- `navigate`は非負safe integerの明示`tab_id`と、8,192文字以下の`http`/`https`絶対URLだけを受ける。URL中のusername/password、空白、他schemeは拒否し、通常のerrorや記録へURL・認証情報を出さない。Extensionはそのprofile内で`chrome.tabs.get`によりtabの存在を確認してから`chrome.tabs.update(tab_id, { url })`を呼ぶ。tab未検出は`tab_not_found`、Chrome API失敗は`navigation_failed`だけを返す。
+- `navigate`はmutationであるため、timeoutまたはtransport喪失時の結果は`outcome_unknown`とし、自動retryしない。responseはrequestのtab IDを含めて相関し、遅延responseはfenceされる。
 - PoCでは遅延responseとの衝突を避けるため、generationごとに最大4,096件のbrowser command request IDを保持する。この上限に達したgenerationは新規commandを拒否する。
 
 合格条件:

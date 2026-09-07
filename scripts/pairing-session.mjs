@@ -4,6 +4,7 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import { validateNavigateTarget } from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
 export function parsePairingCommand(argumentsList) {
@@ -12,6 +13,24 @@ export function parsePairingCommand(argumentsList) {
     return null;
   }
   return { instanceId };
+}
+
+export function parseInteractiveCommand(line) {
+  if (line === "status" || line === "ping" || line === "browser-status" || line === "tabs-list" ||
+    line === "disconnect-active-host" || line === "quit") {
+    return { type: line };
+  }
+  const parts = typeof line === "string" ? line.split(" ") : [];
+  if (parts.length === 3 && parts[0] === "navigate" && /^(0|[1-9]\d*)$/.test(parts[1])) {
+    const tabId = Number(parts[1]);
+    try {
+      const target = validateNavigateTarget({ tabId, url: parts[2] });
+      return { type: "navigate", ...target };
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export async function runPairingSession({
@@ -49,40 +68,53 @@ export async function runPairingSession({
   let exitCode = 0;
   try {
     for await (const line of lineReader) {
-      if (line === "status") {
+      const interactive = parseInteractiveCommand(line);
+      if (interactive?.type === "status") {
         output.write(`status ${command.instanceId} ${harness.server.state.phase}\n`);
-      } else if (line === "ping") {
+      } else if (interactive?.type === "ping") {
         try {
           await harness.server.requestPing({ requestId: createRequestId(), timeoutMs: 1_000 });
           output.write("ping ok\n");
         } catch {
           output.write("ping failed\n");
         }
-      } else if (line === "browser-status") {
+      } else if (interactive?.type === "browser-status") {
         try {
           const result = await harness.server.requestBrowserStatus({ requestId: createRequestId(), timeoutMs: 1_000 });
           output.write(`${JSON.stringify({ command: "browser_status", generation: result.generation, status: result.status })}\n`);
         } catch {
           output.write("browser-status failed\n");
         }
-      } else if (line === "tabs-list") {
+      } else if (interactive?.type === "tabs-list") {
         try {
           const result = await harness.server.requestTabsList({ requestId: createRequestId(), timeoutMs: 1_000 });
           output.write(`${JSON.stringify({ command: "tabs_list", generation: result.generation, tabs: result.tabs })}\n`);
         } catch {
           output.write("tabs-list failed\n");
         }
-      } else if (line === "disconnect-active-host") {
+      } else if (interactive?.type === "navigate") {
+        try {
+          const result = await harness.server.requestNavigate({
+            requestId: createRequestId(),
+            tabId: interactive.tabId,
+            url: interactive.url,
+            timeoutMs: 1_000,
+          });
+          output.write(`${JSON.stringify({ command: "navigate", generation: result.generation, tab_id: result.tab_id, accepted: result.accepted })}\n`);
+        } catch {
+          output.write("navigate failed\n");
+        }
+      } else if (interactive?.type === "disconnect-active-host") {
         try {
           harness.server.disconnectActiveHost();
           output.write("host disconnected\n");
         } catch {
           output.write("host disconnect rejected\n");
         }
-      } else if (line === "quit") {
+      } else if (interactive?.type === "quit") {
         break;
       } else {
-        output.write("error unknown_command\n");
+        output.write(`${typeof line === "string" && line.startsWith("navigate") ? "error invalid_navigate" : "error unknown_command"}\n`);
       }
     }
   } finally {

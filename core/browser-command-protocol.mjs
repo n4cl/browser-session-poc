@@ -1,10 +1,11 @@
 import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
 
-export const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list"]);
+export const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate"]);
 export const BROWSER_COMMAND_TIMEOUT_MAX_MS = 30_000;
 export const BROWSER_COMMAND_REQUEST_ID_MAX_LENGTH = 128;
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
 export const BROWSER_COMMAND_USED_REQUEST_ID_MAX = 4_096;
+export const NAVIGATE_URL_MAX_LENGTH = 8_192;
 
 function fail(message = "invalid browser command message") {
   throw new Error(message);
@@ -41,6 +42,23 @@ function assertRequestId(requestId) {
   if (!nonEmptyString(requestId, BROWSER_COMMAND_REQUEST_ID_MAX_LENGTH)) fail("browser command request id is invalid");
 }
 
+export function validateNavigateTarget({ tabId, url }) {
+  if (!Number.isSafeInteger(tabId) || tabId < 0) fail("navigate tab id is invalid");
+  if (typeof url !== "string" || url.length === 0 || url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url) {
+    fail("navigate URL is invalid");
+  }
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    fail("navigate URL is invalid");
+  }
+  if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username !== "" || parsed.password !== "") {
+    fail("navigate URL is invalid");
+  }
+  return { tabId, url };
+}
+
 function assertTab(tab) {
   exactFields(tab, ["active", "id", "title", "url", "window_id"]);
   if (!Number.isSafeInteger(tab.id) || tab.id < 0 || !Number.isSafeInteger(tab.window_id) || tab.window_id < 0 ||
@@ -62,22 +80,35 @@ export function browserResponseType(command) {
   return `${command}_response`;
 }
 
-export function createBrowserCommandRequest({ command, requestId, binding, connectionId }) {
+function requestFields(command) {
+  return command === "navigate" ? ["tab_id", "url"] : [];
+}
+
+export function createBrowserCommandRequest({ command, requestId, binding, connectionId, target = undefined }) {
   assertRequestId(requestId);
-  return { type: browserRequestType(command), request_id: requestId, ...identity(binding, connectionId) };
+  const request = { type: browserRequestType(command), request_id: requestId, ...identity(binding, connectionId) };
+  if (command === "navigate") {
+    const navigation = validateNavigateTarget(target ?? {});
+    request.tab_id = navigation.tabId;
+    request.url = navigation.url;
+  }
+  return request;
 }
 
 export function validateBrowserCommandRequest(message, { binding, connectionId }) {
   const command = BROWSER_COMMANDS.find((candidate) => message?.type === browserRequestType(candidate));
   if (!command) fail("browser command is unsupported");
-  exactFields(message, ["type", "request_id", ...PAIRING_IDENTITY_FIELDS, "host_connection_id", "protocol_version"]);
+  exactFields(message, ["type", "request_id", ...PAIRING_IDENTITY_FIELDS, "host_connection_id", "protocol_version", ...requestFields(command)]);
   assertIdentity(message, binding, connectionId);
   assertRequestId(message.request_id);
+  if (command === "navigate") {
+    return { command, requestId: message.request_id, target: validateNavigateTarget({ tabId: message.tab_id, url: message.url }) };
+  }
   return { command, requestId: message.request_id };
 }
 
 /** Validates an Extension response and returns a compact result for the session caller. */
-export function validateBrowserCommandResponse(message, { command, requestId, binding, connectionId }) {
+export function validateBrowserCommandResponse(message, { command, requestId, binding, connectionId, target = undefined }) {
   assertRequestId(requestId);
   const common = ["type", "request_id", ...PAIRING_IDENTITY_FIELDS, "host_connection_id", "protocol_version"];
   if (message?.type === "browser_error_response") {
@@ -88,7 +119,8 @@ export function validateBrowserCommandResponse(message, { command, requestId, bi
     }
     return { ok: false, errorCode: message.error_code };
   }
-  exactFields(message, [...common, ...(command === "browser_status" ? ["status"] : ["tabs"])]);
+  const responseFields = command === "browser_status" ? ["status"] : command === "tabs_list" ? ["tabs"] : ["tab_id"];
+  exactFields(message, [...common, ...responseFields]);
   assertIdentity(message, binding, connectionId);
   if (message.type !== browserResponseType(command) || message.request_id !== requestId) {
     fail("browser command response does not match its request");
@@ -100,9 +132,16 @@ export function validateBrowserCommandResponse(message, { command, requestId, bi
     }
     return { ok: true, status: message.status };
   }
-  if (!Array.isArray(message.tabs)) fail("tabs response is invalid");
-  message.tabs.forEach(assertTab);
-  return { ok: true, tabs: message.tabs };
+  if (command === "tabs_list") {
+    if (!Array.isArray(message.tabs)) fail("tabs response is invalid");
+    message.tabs.forEach(assertTab);
+    return { ok: true, tabs: message.tabs };
+  }
+  if (!Number.isSafeInteger(message.tab_id) || message.tab_id < 0) fail("navigate response tab id is invalid");
+  if (target !== undefined && message.tab_id !== validateNavigateTarget(target).tabId) {
+    fail("navigate response does not match its target");
+  }
+  return { ok: true, tab_id: message.tab_id, accepted: true };
 }
 
 export function assertBrowserCommandTimeout(timeoutMs) {

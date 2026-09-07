@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parsePairingCommand, runPairingSession } from "../scripts/pairing-session.mjs";
+import { parseInteractiveCommand, parsePairingCommand, runPairingSession } from "../scripts/pairing-session.mjs";
 
 function writableCapture() {
   let value = "";
@@ -24,6 +24,21 @@ test("pairing CLI accepts only an explicit start instance command", () => {
   assert.equal(parsePairingCommand(["start"]), null);
   assert.equal(parsePairingCommand(["plan", "poc-a"]), null);
   assert.equal(parsePairingCommand(["start", "poc-a", "extra"]), null);
+});
+
+test("pairing CLI parses navigate arguments strictly without normalizing the URL", () => {
+  assert.deepEqual(parseInteractiveCommand("navigate 7 https://example.test/path"), {
+    type: "navigate",
+    tabId: 7,
+    url: "https://example.test/path",
+  });
+  for (const command of [
+    "navigate", "navigate 7", "navigate -1 https://example.test/", "navigate 07 https://example.test/",
+    "navigate 7 https://example.test/ extra", "navigate unsafe https://example.test/", "navigate 7 file:///private/tmp/x",
+    "navigate 7 https://user:password@example.test/",
+  ]) {
+    assert.equal(parseInteractiveCommand(command), null);
+  }
 });
 
 test("pairing CLI reports status, rejects unknown commands, and closes once on quit", async () => {
@@ -114,6 +129,40 @@ test("pairing CLI dispatches browser commands with fresh request IDs and prints 
   ].join("\n"));
   assert.equal(output.value().includes("lease-must-not-print"), false);
   assert.equal(errorOutput.value(), "");
+});
+
+test("pairing CLI dispatches navigate with exact arguments and never echoes its URL", async () => {
+  const output = writableCapture();
+  const calls = [];
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["navigate 7 https://example.test/private", "navigate 7 https://example.test/ extra", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    createRequestId: () => "request-navigate",
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestNavigate(options) {
+          calls.push(options);
+          return { generation: 3, tab_id: 7, accepted: true, lease_id: "lease-must-not-print" };
+        },
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [{
+    requestId: "request-navigate",
+    tabId: 7,
+    url: "https://example.test/private",
+    timeoutMs: 1_000,
+  }]);
+  assert.equal(output.value(), "ready poc-a ISSUED\n{\"command\":\"navigate\",\"generation\":3,\"tab_id\":7,\"accepted\":true}\nerror invalid_navigate\n");
+  assert.equal(output.value().includes("example.test"), false);
+  assert.equal(output.value().includes("lease-must-not-print"), false);
 });
 
 test("pairing CLI reports browser command failures without exposing transport details and still cleans up", async () => {
