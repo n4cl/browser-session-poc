@@ -44,7 +44,8 @@ function assertRequestId(requestId) {
 
 export function validateNavigateTarget({ tabId, url }) {
   if (!Number.isSafeInteger(tabId) || tabId < 0) fail("navigate tab id is invalid");
-  if (typeof url !== "string" || url.length === 0 || url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url) {
+  if (typeof url !== "string" || url.length === 0 || url.length > NAVIGATE_URL_MAX_LENGTH ||
+    url.trim() !== url || /[\u0000-\u001F\u007F]/.test(url)) {
     fail("navigate URL is invalid");
   }
   let parsed;
@@ -56,7 +57,8 @@ export function validateNavigateTarget({ tabId, url }) {
   if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username !== "" || parsed.password !== "") {
     fail("navigate URL is invalid");
   }
-  return { tabId, url };
+  if (parsed.href.length > NAVIGATE_URL_MAX_LENGTH) fail("navigate URL is invalid");
+  return { tabId, url: parsed.href };
 }
 
 function assertTab(tab) {

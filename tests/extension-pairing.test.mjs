@@ -226,7 +226,7 @@ test("navigate verifies a local tab, accepts only the paired request, and return
   port.emitMessage(active());
   await settle();
 
-  port.emitMessage({ type: "navigate_request", request_id: "navigate-1", ...identity(), tab_id: 7, url: "https://example.test/next" });
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-1", ...identity(), tab_id: 7, url: "https:example.test/next" });
   await settle();
   assert.deepEqual(updates, [{ tabId: 7, properties: { url: "https://example.test/next" } }]);
   assert.deepEqual(port.messages.at(-1), { type: "navigate_response", request_id: "navigate-1", ...identity(), tab_id: 7 });
@@ -241,7 +241,7 @@ test("navigate verifies a local tab, accepts only the paired request, and return
     error_code: "tab_not_found",
   });
 
-  port.emitMessage({ type: "navigate_request", request_id: "navigate-invalid", ...identity(), tab_id: 7, url: "https://user:password@example.test/" });
+  port.emitMessage({ type: "navigate_request", request_id: "navigate-invalid", ...identity(), tab_id: 7, url: "https://example.test/\tprivate" });
   await settle();
   assert.equal(port.disconnected, true);
 });

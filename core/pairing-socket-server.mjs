@@ -385,8 +385,9 @@ export class PairingSocketServer {
     for (const [requestId, pending] of this.#pendingBrowserCommands) {
       this.#pendingBrowserCommands.delete(requestId);
       this.#clearTimer(pending.timer);
-      const error = new Error("browser command failed: transport_closed");
-      error.code = "transport_closed";
+      const errorCode = pending.command === "navigate" ? "outcome_unknown" : "transport_closed";
+      const error = new Error(`browser command failed: ${errorCode}`);
+      error.code = errorCode;
       pending.reject(error);
     }
     for (const connection of this.#sockets) {

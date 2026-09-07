@@ -53,7 +53,7 @@ function validateConnectionId(value) {
 
 function validateNavigateTarget({ tabId, url }) {
   if (!Number.isSafeInteger(tabId) || tabId < 0 || typeof url !== "string" || url.length === 0 ||
-    url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url) fail();
+    url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url || /[\u0000-\u001F\u007F]/.test(url)) fail();
   let parsed;
   try {
     parsed = new URL(url);
@@ -61,7 +61,8 @@ function validateNavigateTarget({ tabId, url }) {
     fail();
   }
   if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.username !== "" || parsed.password !== "") fail();
-  return { tabId, url };
+  if (parsed.href.length > NAVIGATE_URL_MAX_LENGTH) fail();
+  return { tabId, url: parsed.href };
 }
 
 function validateBrowserRequest(message, binding, hostConnectionId, command) {

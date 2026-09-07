@@ -334,10 +334,19 @@ test("disconnecting A's active host fences its pending ping without affecting B"
   const pendingPing = a.server.requestPing({ requestId: "a-pending", timeoutMs: 1_000 });
   const pendingPingRejected = assert.rejects(pendingPing, /pairing ping was not completed/);
   assert.equal((await aClient.next()).type, "ping_request");
+  const pendingNavigate = a.server.requestNavigate({
+    requestId: "a-pending-navigate",
+    tabId: 7,
+    url: "https://example.test/",
+    timeoutMs: 1_000,
+  });
+  const pendingNavigateRejected = assert.rejects(pendingNavigate, (error) => error.code === "outcome_unknown");
+  assert.equal((await aClient.next()).type, "navigate_request");
   const aClosed = once(aClient.socket, "close");
   a.server.disconnectActiveHost();
   await aClosed;
   await pendingPingRejected;
+  await pendingNavigateRejected;
   assert.equal(a.server.state.phase, "ACTIVE");
   assert.equal(a.server.state.activeConnectionId, null);
   assert.throws(
@@ -349,6 +358,31 @@ test("disconnecting A's active host fences its pending ping without affecting B"
     request_id: "b-remains-active",
   })));
   assert.equal((await bClient.next()).request_id, "b-remains-active");
+});
+
+test("closing the server marks pending navigate outcome unknown and read commands transport closed", async (t) => {
+  const fixture = await serverFixture("poc-a", "838383838382");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const navigation = fixture.server.requestNavigate({
+    requestId: "close-navigate",
+    tabId: 7,
+    url: "https://example.test/",
+    timeoutMs: 1_000,
+  });
+  const navigationRejected = assert.rejects(navigation, (error) => error.code === "outcome_unknown");
+  assert.equal((await client.next()).type, "navigate_request");
+  const status = fixture.server.requestBrowserStatus({ requestId: "close-status", timeoutMs: 1_000 });
+  const statusRejected = assert.rejects(status, (error) => error.code === "transport_closed");
+  assert.equal((await client.next()).type, "browser_status_request");
+
+  await fixture.server.close();
+  await navigationRejected;
+  await statusRejected;
 });
 
 test("disconnect-active-host rejects before an ACTIVE transport exists", async (t) => {

@@ -214,13 +214,13 @@ test("browser commands preserve identity, correlate responses, and reject timeou
   assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "nope" }), PairingProtocolError);
 });
 
-test("navigate has an exact safe target schema, correlates its tab, and marks timeout outcome unknown", () => {
+test("navigate canonicalizes an exact safe target, correlates its tab, and marks timeout outcome unknown", () => {
   const active = activeState();
   const status = issueBrowserCommand(active, { command: "browser_status", requestId: "status-concurrent" });
   const navigation = issueBrowserCommand(status.state, {
     command: "navigate",
     requestId: "navigate-1",
-    target: { tabId: 7, url: "https://example.test/next" },
+    target: { tabId: 7, url: "https:example.test/next" },
   });
   assert.equal(navigation.state.pendingBrowserRequests.length, 2);
   assert.deepEqual(navigation.effects[0].message, {
@@ -285,7 +285,10 @@ test("navigate has an exact safe target schema, correlates its tab, and marks ti
     { tabId: 7, url: "ftp://example.test/" },
     { tabId: 7, url: "https://user:password@example.test/" },
     { tabId: 7, url: "https://example.test/ " },
+    { tabId: 7, url: "https://example.test/\tpath" },
+    { tabId: 7, url: "https://example.test/\npath" },
     { tabId: 7, url: "x".repeat(8_193) },
+    { tabId: 7, url: `https:example.test/${"a".repeat(8_173)}` },
   ]) {
     assert.throws(() => issueBrowserCommand(activeState(), { command: "navigate", requestId: "invalid-target", target }), PairingProtocolError);
   }
