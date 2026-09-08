@@ -4,7 +4,11 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS, validateNavigateTarget } from "../core/browser-command-protocol.mjs";
+import {
+  BROWSER_ERROR_CODES,
+  SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+  validateNavigateTarget,
+} from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
 export function parsePairingCommand(argumentsList) {
@@ -125,8 +129,9 @@ export async function runPairingSession({
             truncated: result.truncated,
             partial: result.partial,
           })}\n`);
-        } catch {
-          output.write("snapshot failed\n");
+        } catch (error) {
+          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
+          output.write(`snapshot failed${errorCode}\n`);
         }
       } else if (interactive?.type === "disconnect-active-host") {
         try {

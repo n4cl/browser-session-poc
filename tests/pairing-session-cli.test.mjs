@@ -214,6 +214,34 @@ test("pairing CLI prints only structured snapshot content", async () => {
   assert.equal(output.value().includes("lease-must-not-print"), false);
 });
 
+test("pairing CLI displays only fixed snapshot error codes", async () => {
+  const output = writableCapture();
+  let calls = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["snapshot 7", "snapshot 8", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestSnapshot() {
+          calls += 1;
+          const error = new Error(calls === 1 ? "raw CDP detail" : "raw transport detail");
+          error.code = calls === 1 ? "snapshot_failed" : "unknown_secret_code";
+          throw error;
+        },
+      },
+      async close() {},
+    }),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(output.value(), "ready poc-a ISSUED\nsnapshot failed snapshot_failed\nsnapshot failed\n");
+  assert.doesNotMatch(output.value(), /raw CDP detail|raw transport detail|unknown_secret_code/);
+});
+
 test("pairing CLI reports browser command failures without exposing transport details and still cleans up", async () => {
   const output = writableCapture();
   let closeCalls = 0;
