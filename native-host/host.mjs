@@ -30,7 +30,13 @@ export { PAIRING_PROTOCOL_VERSION } from "../core/pairing-protocol.mjs";
 export const NATIVE_HOST_FAILURE_SCHEMA_VERSION = 1;
 export const NATIVE_HOST_FAILURE_MARKER_FILENAME = "native-host-last-failure.json";
 export const NATIVE_HOST_FAILURE_STAGES = Object.freeze([
-  "setup",
+  "setup_resolve_paths",
+  "setup_validate_origin",
+  "setup_read_profile",
+  "setup_read_descriptor",
+  "setup_create_connection_id",
+  "setup_connect_socket",
+  "setup_validate_connector",
   "handshake_send_register",
   "handshake_receive_challenge",
   "handshake_write_challenge",
@@ -322,7 +328,7 @@ export async function runPairingNativeHost({
   let paths;
   let bridge;
   let phase = "START";
-  let failureStage = "setup";
+  let failureStage = "setup_resolve_paths";
   let failureReason = "unexpected";
   let asynchronousFailure;
   const pendingRequests = new Map();
@@ -343,27 +349,34 @@ export async function runPairingNativeHost({
   };
 
   try {
+    failureStage = "setup_resolve_paths";
+    failureReason = "validation";
     paths = resolvePairingPaths({ runtimeRoot: pairingRuntimeRoot, instanceId });
+    failureStage = "setup_validate_origin";
+    failureReason = "validation";
     if (origin !== GATE_1_EXTENSION_ORIGIN) {
-      failureStage = "setup";
-      failureReason = "validation";
       throw new Error("unexpected extension origin");
     }
 
-    failureStage = "setup";
+    failureStage = "setup_read_profile";
     failureReason = "validation";
     const profile = await readProfile(paths);
+    failureStage = "setup_read_descriptor";
+    failureReason = "validation";
     const descriptor = await readDescriptor(paths, { profileInstanceId: profile.profile_instance_id, now });
+    failureStage = "setup_create_connection_id";
+    failureReason = "validation";
     const hostConnectionId = createUuid();
     if (!isNonEmptyString(hostConnectionId)) {
       throw new Error("invalid host connection id");
     }
 
-    failureStage = "setup";
+    failureStage = "setup_connect_socket";
     failureReason = "transport";
     bridge = await socketConnector({ socketPath: descriptor.socket_path });
+    failureStage = "setup_validate_connector";
+    failureReason = "validation";
     if (!bridge || typeof bridge.send !== "function" || typeof bridge.receive !== "function" || typeof bridge.close !== "function") {
-      failureReason = "validation";
       throw new Error("invalid pairing socket connector");
     }
 

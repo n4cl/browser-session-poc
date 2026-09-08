@@ -459,6 +459,55 @@ test("pairing Native Host failure diagnostics use exact fields and do not expose
   assert.doesNotMatch(await readFile(markerPath, "utf8"), /secret-session|secret-request|secret socket error/);
 });
 
+test("pairing Native Host setup diagnostics identify descriptor and socket boundaries", async () => {
+  const fixture = await pairingFixture();
+  const descriptorFailures = [];
+  const descriptorInput = new PassThrough();
+  descriptorInput.end();
+  assert.equal(
+    await runPairingNativeHost({
+      input: descriptorInput,
+      output: new PassThrough(),
+      stderr: new PassThrough(),
+      origin: GATE_1_EXTENSION_ORIGIN,
+      runtimeRoot: fixture.runtimeRoot,
+      instanceId: fixture.paths.instanceId,
+      readDescriptor: async () => { throw new Error("secret descriptor validation"); },
+      recordFailure: async (marker) => descriptorFailures.push(marker),
+      now: PAIRING_NOW,
+    }),
+    false,
+  );
+  assert.deepEqual(descriptorFailures.map(({ stage, reason }) => ({ stage, reason })), [{
+    stage: "setup_read_descriptor",
+    reason: "validation",
+  }]);
+  assert.doesNotMatch(JSON.stringify(descriptorFailures), /secret descriptor validation|session-a|nonce-a/);
+
+  const socketFailures = [];
+  const socketInput = new PassThrough();
+  socketInput.end();
+  assert.equal(
+    await runPairingNativeHost({
+      input: socketInput,
+      output: new PassThrough(),
+      stderr: new PassThrough(),
+      origin: GATE_1_EXTENSION_ORIGIN,
+      runtimeRoot: fixture.runtimeRoot,
+      instanceId: fixture.paths.instanceId,
+      socketConnector: async () => { throw new Error("secret socket transport"); },
+      recordFailure: async (marker) => socketFailures.push(marker),
+      now: PAIRING_NOW,
+    }),
+    false,
+  );
+  assert.deepEqual(socketFailures.map(({ stage, reason }) => ({ stage, reason })), [{
+    stage: "setup_connect_socket",
+    reason: "transport",
+  }]);
+  assert.doesNotMatch(JSON.stringify(socketFailures), /secret socket transport|session-a|nonce-a/);
+});
+
 test("pairing Native Host records an ACTIVE socket-to-Extension failure and ignores diagnostic writer errors", async (t) => {
   const fixture = await pairingFixture();
   const server = new PairingSocketServer({
