@@ -60,7 +60,7 @@ function apiFixture({ sendCommand = undefined, attach = undefined, detach = unde
       async sendCommand(target, method) {
         calls.push(["sendCommand", target, method]);
         if (sendCommand) return sendCommand(target, method);
-        if (method === "Page.getFrameTree") return { frame: { loaderId: "loader-a" } };
+        if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-a" } } };
         if (method === "Accessibility.getFullAXTree") return { nodes: [node("root")] };
         return {};
       },
@@ -231,6 +231,29 @@ test("debugger attach failure never attempts detach and Chrome errors stay fixed
   assert.deepEqual(calls.map(([name]) => name), ["tabs.get", "attach"]);
 });
 
+test("invalid Page.getFrameTree responses return fixed snapshot_failed and still detach", async () => {
+  for (const response of [{}, { frameTree: {} }, { frameTree: null }]) {
+    const { api, calls } = apiFixture({
+      sendCommand(_target, method) {
+        if (method === "Page.getFrameTree") return response;
+        if (method === "Accessibility.getFullAXTree") return { nodes: [node("root")] };
+        return {};
+      },
+    });
+    await assert.rejects(createDebuggerSnapshotRunner({ chromeApi: api }).snapshot(7), (error) => {
+      assert.equal(error.code, "snapshot_failed");
+      assert.equal(error.message, "snapshot_failed");
+      return true;
+    });
+    assert.deepEqual(calls.map(([name]) => name), [
+      "tabs.get",
+      "attach",
+      "sendCommand",
+      "detach",
+    ]);
+  }
+});
+
 test("same-tab snapshots reject busy and allow a later operation", async () => {
   let release;
   const blocked = new Promise((resolve) => { release = resolve; });
@@ -245,7 +268,7 @@ test("same-tab snapshots reject busy and allow a later operation", async () => {
   const first = runner.snapshot(7);
   await new Promise((resolve) => setImmediate(resolve));
   await assert.rejects(runner.snapshot(7), (error) => error.code === "debugger_busy");
-  release({ frame: { loaderId: "loader-a" } });
+  release({ frameTree: { frame: { loaderId: "loader-a" } } });
   await first;
   await assert.doesNotReject(runner.snapshot(7));
 });
@@ -272,7 +295,7 @@ test("background drops a snapshot response when the Native Host port changes mid
   port.emit(request());
   await new Promise((resolve) => setImmediate(resolve));
   port.disconnect();
-  release({ frame: { loaderId: "loader-a" } });
+  release({ frameTree: { frame: { loaderId: "loader-a" } } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(port.messages.some((message) => message.type === "snapshot_response"), false);
   assert.equal(controller.getState().phase, "IDLE");

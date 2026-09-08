@@ -72,9 +72,12 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
       }
 
       try {
-        const frameTree = await chromeApi.debugger.sendCommand({ tabId }, "Page.getFrameTree");
+        const frameTreeResponse = await chromeApi.debugger.sendCommand({ tabId }, "Page.getFrameTree");
+        const frameTree = frameTreeResponse?.frameTree;
         const loaderId = frameTree?.frame?.loaderId;
-        if (typeof loaderId !== "string" || loaderId.length === 0) throw failure("snapshot_failed");
+        if (!frameTree || typeof frameTree !== "object" || typeof loaderId !== "string" || loaderId.length === 0) {
+          throw failure("snapshot_failed");
+        }
         await chromeApi.debugger.sendCommand({ tabId }, "Accessibility.enable");
         accessibilityEnabled = true;
         const accessibilityTree = await chromeApi.debugger.sendCommand({ tabId }, "Accessibility.getFullAXTree");
