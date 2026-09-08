@@ -284,6 +284,35 @@ test("browser_status and tabs_list stay correlated to the active instance and ex
   await staleClosed;
 });
 
+test("snapshot uses a five-second default timeout distinct from generic browser commands", async (t) => {
+  const timerDelays = [];
+  const fixture = await serverFixture("poc-a", "111111111112", {
+    setTimer(callback, delay) {
+      timerDelays.push(delay);
+      return { callback, delay };
+    },
+    clearTimer() {},
+  });
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const snapshot = fixture.server.requestSnapshot({ requestId: "snapshot-default", tabId: 7 });
+  assert.equal((await client.next()).request_id, "snapshot-default");
+  assert.equal(timerDelays.at(-1), 5_000);
+  client.send(encodeNativeMessage(message(fixture.descriptor, "snapshot_response", "connection-a", {
+    request_id: "snapshot-default",
+    tab_id: 7,
+    document: { loader_id: "loader-default" },
+    nodes: [],
+    truncated: false,
+    partial: false,
+  })));
+  await assert.doesNotReject(snapshot);
+});
+
 test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {
   const fixture = await serverFixture("poc-a", "222222222222");
   t.after(() => fixture.server.close());

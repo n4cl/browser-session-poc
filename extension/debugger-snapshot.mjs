@@ -36,8 +36,8 @@ function assertDebuggerApi(chromeApi) {
 
 /**
  * Runs one read-only accessibility snapshot. A runner is scoped to one
- * Extension connection and serializes operations per tab; separate Chrome
- * profiles get separate runner instances and can proceed concurrently.
+ * Extension service-worker controller and serializes operations per tab;
+ * separate Chrome profiles get separate controllers and can proceed concurrently.
  */
 export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
   if (!chromeApi) throw new TypeError("chromeApi is required");

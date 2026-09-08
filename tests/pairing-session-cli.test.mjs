@@ -204,7 +204,7 @@ test("pairing CLI prints only structured snapshot content", async () => {
     }),
   });
   assert.equal(exitCode, 0);
-  assert.deepEqual(calls, [{ requestId: "request-snapshot", tabId: 7, timeoutMs: 1_000 }]);
+  assert.deepEqual(calls, [{ requestId: "request-snapshot", tabId: 7, timeoutMs: 5_000 }]);
   assert.equal(output.value(), [
     "ready poc-a ISSUED",
     '{"command":"snapshot","generation":3,"tab_id":7,"document":{"loader_id":"loader-a"},"nodes":[],"truncated":false,"partial":false}',

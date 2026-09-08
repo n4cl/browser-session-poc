@@ -145,7 +145,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 `browser_status`と`tabs_list`は、pairing済みのsession専用socketからactiveな`host_connection_id`へだけ送る。requestとresponseにはidentity tupleと`request_id`を必須とし、responseのidentity、connection、command、request IDが一致しなければ破棄してtransportをfenceする。`tabs_list`はExtensionの`chrome.tabs.query({})`で、そのExtensionが属するChrome profileのタブだけを取得する。
 
-手動検証では`npm run pairing -- start <instance-id>`の対話入力で`browser-status`、`tabs-list`、`navigate <tab-id> <url>`を使う。各実行は新しいrequest IDと1,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。`navigate`の成功は`chrome.tabs.update`がrequestを受理したことだけを示し、page load完了を保証しない。実機検証記録にはtitle、URLなどの実値を保存しない。
+手動検証では`npm run pairing -- start <instance-id>`の対話入力で`browser-status`、`tabs-list`、`navigate <tab-id> <url>`、`snapshot <tab-id>`を使う。status/tabs/navigateは各実行で新しいrequest IDと1,000 ms timeout、snapshotはCDP attachとAccessibility取得のため5,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。`navigate`の成功は`chrome.tabs.update`がrequestを受理したことだけを示し、page load完了を保証しない。実機検証記録にはtitle、URLなどの実値を保存しない。
 
 この作業単位の入力・出力制約:
 
@@ -165,7 +165,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
   → Accessibility.disable（enable成功時） → chrome.debugger.detach
 ```
 
-同じExtension connection内の同一tabへの実行は`debugger_busy`で拒否する。attachに失敗した場合はdetachを試みず、CDP、tab、detachの詳細エラーは返さない。取得後であってもdisableまたはdetachに失敗した場合は`debugger_detach_failed`として成功を返さない。固定error codeは`debugger_unavailable`、`tab_not_found`、`debugger_busy`、`debugger_attach_failed`、`snapshot_failed`、`debugger_detach_failed`、`response_too_large`である。
+同じExtension service-worker controller内の同一tabへの実行は`debugger_busy`で拒否する。attachに失敗した場合はdetachを試みず、CDP、tab、detachの詳細エラーは返さない。取得後であってもdisableまたはdetachに失敗した場合は`debugger_detach_failed`として成功を返さない。固定error codeは`debugger_unavailable`、`tab_not_found`、`debugger_busy`、`debugger_attach_failed`、`snapshot_failed`、`debugger_detach_failed`、`response_too_large`である。
 
 返却するsnapshotはraw CDPを含まず、`document.loader_id`（root frameのloader ID）、`tab_id`、最大100件の連番`ref`、`parent_ref`、`backend_dom_node_id`、`role`、`name`、`value`、`state`（`disabled`、`expanded`、`focused`、`hidden`のbooleanだけ）で構成する。文字列は512文字、木の深さは16、response全体は64 KiB以内に制限し、欠落・上限による省略は`partial`または`truncated`で示す。parentを除外したnodeや循環参照を出力せず、validatorが受理できる連番refとparentだけを生成する。対象documentは取得時のloader IDに束縛されるため、navigation後はsnapshotのdocument/ref/backend DOM参照をstaleとして再利用せず、再取得する。PoCではroot frameだけを対象とし、OOPIFの別frame sessionをattachして取得しない。
 

@@ -13,7 +13,7 @@ import {
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
 import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
-import { assertBrowserCommandTimeout } from "./browser-command-protocol.mjs";
+import { assertBrowserCommandTimeout, SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS } from "./browser-command-protocol.mjs";
 
 export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
@@ -155,7 +155,7 @@ export class PairingSocketServer {
     return this.requestBrowserCommand({ command: "navigate", requestId, target: { tabId, url }, timeoutMs });
   }
 
-  requestSnapshot({ requestId, tabId, timeoutMs = 1_000 }) {
+  requestSnapshot({ requestId, tabId, timeoutMs = SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS }) {
     return this.requestBrowserCommand({ command: "snapshot", requestId, target: { tabId }, timeoutMs });
   }
 

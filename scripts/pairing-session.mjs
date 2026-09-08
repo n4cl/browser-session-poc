@@ -4,7 +4,7 @@ import process from "node:process";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { validateNavigateTarget } from "../core/browser-command-protocol.mjs";
+import { SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS, validateNavigateTarget } from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
 export function parsePairingCommand(argumentsList) {
@@ -114,7 +114,7 @@ export async function runPairingSession({
           const result = await harness.server.requestSnapshot({
             requestId: createRequestId(),
             tabId: interactive.tabId,
-            timeoutMs: 1_000,
+            timeoutMs: SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
           });
           output.write(`${JSON.stringify({
             command: "snapshot",
