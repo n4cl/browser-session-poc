@@ -50,7 +50,7 @@ function fakePort() {
   };
 }
 
-function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined } = {}) {
+function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined, storageSet = undefined } = {}) {
   const storage = storedBinding === undefined ? {} : { pairing_binding: storedBinding };
   const setCalls = [];
   const connectedNames = [];
@@ -73,6 +73,7 @@ function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, t
           async get(key) { return { [key]: storage[key] }; },
           async set(value) {
             setCalls.push(value);
+            if (storageSet) return storageSet(value);
             Object.assign(storage, value);
           },
         },
@@ -133,6 +134,80 @@ test("initial pairing does not persist before pair_active and persists only the 
   port.emitMessage({ type: "ping_request", request_id: "request-a", ...identity() });
   await settle();
   assert.deepEqual(port.messages.at(-1), { type: "ping_response", request_id: "request-a", ...identity() });
+});
+
+test("pair_active storage failures report only a fixed diagnostic and still disconnect", async () => {
+  const port = fakePort();
+  const errors = [];
+  const chrome = fakeChrome({
+    ports: [port],
+    storageSet() { throw new Error("storage secret detail"); },
+  });
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { errors.push(args); },
+  });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+
+  assert.deepEqual(errors, [["Native Messaging pairing protocol failure", {
+    stage: "pair_active_storage",
+    reason: "storage",
+  }]]);
+  assert.doesNotMatch(JSON.stringify(errors), /storage secret detail|session-a|browser-a/);
+  assert.equal(port.disconnected, true);
+});
+
+test("an unexpected AWAIT_ACTIVE message reports fixed validation diagnostics without payload data", async () => {
+  const port = fakePort();
+  const errors = [];
+  const chrome = fakeChrome({ ports: [port] });
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { errors.push(args); },
+  });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage({ type: "unexpected", request_id: "secret-request", url: "https://secret.example/" });
+  await settle();
+
+  assert.deepEqual(errors, [["Native Messaging pairing protocol failure", {
+    stage: "pair_active_validation",
+    reason: "validation",
+  }]]);
+  assert.doesNotMatch(JSON.stringify(errors), /secret-request|secret\.example/);
+  assert.equal(port.disconnected, true);
+});
+
+test("an unknown ACTIVE message reports fixed unexpected diagnostics without payload data", async () => {
+  const port = fakePort();
+  const errors = [];
+  const chrome = fakeChrome({ ports: [port] });
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { errors.push(args); },
+  });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+  port.emitMessage({ type: "unknown", request_id: "secret-active-request", tab_id: 99, url: "https://secret.example/" });
+  await settle();
+
+  assert.deepEqual(errors, [["Native Messaging pairing protocol failure", {
+    stage: "unexpected_message",
+    reason: "unexpected",
+  }]]);
+  assert.doesNotMatch(JSON.stringify(errors), /secret-active-request|secret\.example|99/);
+  assert.equal(port.disconnected, true);
 });
 
 test("active Extension correlates browser_status and tabs_list with its paired identity", async () => {

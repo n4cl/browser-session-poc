@@ -165,6 +165,7 @@ pairing modeのNative Host終了原因を実機PoCで切り分けるため、失
 markerは`schema_version`、`browser_instance_id`、固定enumの`stage`/`reason`、`recorded_at`だけを持ち、
 session・lease・nonce・request・URL・例外・path・Chrome errorなどの機密値は記録しない。通常のACTIVE接続終了では作成せず、
 診断書込み失敗は本体の接続結果を隠さない。
+Extension service workerのpairing処理も、同じくpayloadを保存せず、固定`stage`/`reason`だけを注入可能な`reportError`へ渡す。
 
 ```text
 Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree

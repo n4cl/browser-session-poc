@@ -20,6 +20,25 @@ const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
 const STORAGE_KEY = PAIRING_BINDING_STORAGE_KEY;
 const RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000];
 
+export const PAIRING_FAILURE_STAGES = Object.freeze([
+  "pair_challenge",
+  "pair_active_storage",
+  "pair_active_validation",
+  "active_ping",
+  "active_browser_status",
+  "active_tabs_list",
+  "active_navigate",
+  "active_snapshot",
+  "unexpected_message",
+]);
+export const PAIRING_FAILURE_REASONS = Object.freeze([
+  "validation",
+  "storage",
+  "chrome_api",
+  "transport",
+  "unexpected",
+]);
+
 function reportErrorToConsole(message, detail) {
   console.error(message, detail);
 }
@@ -98,14 +117,23 @@ export function createPairingController({
 
   const onMessage = async (target, message) => {
     if (port !== target) return;
+    let failureStage = "unexpected_message";
+    let failureReason = "unexpected";
     try {
       if (phase === "AWAIT_CHALLENGE") {
+        failureStage = "pair_challenge";
+        failureReason = "validation";
         challenge = validatePairChallenge(message, { binding });
+        failureReason = "transport";
         target.postMessage(createPairAck(challenge));
         phase = "AWAIT_ACTIVE";
       } else if (phase === "AWAIT_ACTIVE") {
+        failureStage = "pair_active_validation";
+        failureReason = "validation";
         const activeBinding = validatePairActive(message, challenge);
         if (challenge.mode === "initial") {
+          failureStage = "pair_active_storage";
+          failureReason = "storage";
           await chromeApi.storage.local.set({ [STORAGE_KEY]: activeBinding });
         }
         if (port !== target) return;
@@ -116,22 +144,37 @@ export function createPairingController({
         retryAttempt = 0;
       } else if (phase === "ACTIVE") {
         if (message?.type === "ping_request") {
-          target.postMessage(respondToPing(message, binding, activeConnectionId));
+          failureStage = "active_ping";
+          failureReason = "validation";
+          const response = respondToPing(message, binding, activeConnectionId);
+          failureReason = "transport";
+          target.postMessage(response);
         } else if (message?.type === "browser_status_request") {
-          target.postMessage(respondToBrowserStatus(message, binding, activeConnectionId, {
+          failureStage = "active_browser_status";
+          failureReason = "validation";
+          const response = respondToBrowserStatus(message, binding, activeConnectionId, {
             chromeTabsAvailable: typeof chromeApi.tabs?.query === "function",
-          }));
+          });
+          failureReason = "transport";
+          target.postMessage(response);
         } else if (message?.type === "tabs_list_request") {
+          failureStage = "active_tabs_list";
+          failureReason = "validation";
           if (typeof chromeApi.tabs?.query !== "function") {
-            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "tabs_list", "tabs_unavailable"));
+            const response = respondToBrowserError(message, binding, activeConnectionId, "tabs_list", "tabs_unavailable");
+            failureReason = "transport";
+            target.postMessage(response);
           } else {
             let response;
+            failureReason = "chrome_api";
             try {
               const tabs = await chromeApi.tabs.query({});
               if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              failureReason = "validation";
               response = respondToTabsList(message, binding, activeConnectionId, tabs);
             } catch (error) {
               if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+              failureReason = "validation";
               response = respondToBrowserError(
                 message,
                 binding,
@@ -142,36 +185,55 @@ export function createPairingController({
                   : "tabs_unavailable",
               );
             }
+            failureReason = "transport";
             target.postMessage(response);
           }
         } else if (message?.type === "navigate_request") {
+          failureStage = "active_navigate";
+          failureReason = "validation";
           const navigation = validateNavigateRequest(message, binding, activeConnectionId);
           if (typeof chromeApi.tabs?.get !== "function" || typeof chromeApi.tabs?.update !== "function") {
-            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed"));
+            const response = respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed");
+            failureReason = "transport";
+            target.postMessage(response);
           } else {
+            failureReason = "chrome_api";
             try {
               await chromeApi.tabs.get(navigation.tabId);
             } catch {
               if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
-              target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "tab_not_found"));
+              failureReason = "validation";
+              const response = respondToBrowserError(message, binding, activeConnectionId, "navigate", "tab_not_found");
+              failureReason = "transport";
+              target.postMessage(response);
               return;
             }
             try {
               await chromeApi.tabs.update(navigation.tabId, { url: navigation.url });
             } catch {
               if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
-              target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed"));
+              failureReason = "validation";
+              const response = respondToBrowserError(message, binding, activeConnectionId, "navigate", "navigation_failed");
+              failureReason = "transport";
+              target.postMessage(response);
               return;
             }
             if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            failureReason = "transport";
             target.postMessage(respondToNavigate(message, binding, activeConnectionId, navigation.tabId));
           }
         } else if (message?.type === "snapshot_request") {
+          failureStage = "active_snapshot";
+          failureReason = "validation";
           const snapshotTarget = validateSnapshotRequest(message, binding, activeConnectionId);
           try {
+            failureReason = "chrome_api";
             const snapshot = await snapshotRunner.snapshot(snapshotTarget.tabId);
             if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
-            target.postMessage(respondToSnapshot(message, binding, activeConnectionId, snapshot));
+            failureReason = "validation";
+            const response = respondToSnapshot(message, binding, activeConnectionId, snapshot);
+            failureReason = "transport";
+            target.postMessage(response);
           } catch (error) {
             if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
             const errorCode = error?.code === "response_too_large"
@@ -179,15 +241,30 @@ export function createPairingController({
               : SNAPSHOT_ERROR_CODES.includes(error?.code)
                 ? error.code
                 : "snapshot_failed";
-            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "snapshot", errorCode));
+            failureReason = "validation";
+            const response = respondToBrowserError(message, binding, activeConnectionId, "snapshot", errorCode);
+            failureReason = "transport";
+            target.postMessage(response);
           }
         } else {
+          failureStage = "unexpected_message";
+          failureReason = "unexpected";
           throw new Error("unexpected active protocol message");
         }
       } else {
+        failureStage = "unexpected_message";
+        failureReason = "unexpected";
         throw new Error("unexpected pairing message");
       }
     } catch {
+      try {
+        reportError("Native Messaging pairing protocol failure", {
+          stage: failureStage,
+          reason: failureReason,
+        });
+      } catch {
+        // Diagnostic reporting must not change the disconnect behavior.
+      }
       disconnect(target);
     }
   };
