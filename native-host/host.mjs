@@ -168,6 +168,8 @@ function assertExtensionResponse(message, descriptor, hostConnectionId) {
       ? "tabs_list"
       : message?.type === "navigate_response"
         ? "navigate"
+        : message?.type === "snapshot_response"
+          ? "snapshot"
       : message?.type === "browser_error_response" ? message.command : null;
   validateBrowserCommandResponse(message, {
     command,

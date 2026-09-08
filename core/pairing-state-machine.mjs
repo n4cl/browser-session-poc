@@ -262,6 +262,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
     case "browser_status_response":
     case "tabs_list_response":
     case "navigate_response":
+    case "snapshot_response":
     case "browser_error_response": {
       if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
         fail("browser command is not permitted in the current state");

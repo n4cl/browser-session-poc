@@ -296,6 +296,99 @@ test("navigate canonicalizes an exact safe target, correlates its tab, and marks
   }
 });
 
+test("snapshot is explicit-tab, read-only, and timeout is retry-safe", () => {
+  const issued = issueBrowserCommand(activeState(), {
+    command: "snapshot",
+    requestId: "snapshot-1",
+    target: { tabId: 7 },
+  });
+  assert.deepEqual(issued.effects[0].message, {
+    type: "snapshot_request",
+    ...identity("connection-a"),
+    request_id: "snapshot-1",
+    tab_id: 7,
+  });
+  const timeout = cancelBrowserCommand(issued.state, "snapshot-1");
+  assert.deepEqual(timeout.effects, [{
+    type: "browser_rejected",
+    requestId: "snapshot-1",
+    response: { ok: false, errorCode: "timeout" },
+  }]);
+  assert.throws(() => issueBrowserCommand(timeout.state, {
+    command: "snapshot",
+    requestId: "snapshot-1",
+    target: { tabId: 7 },
+  }), PairingProtocolError);
+});
+
+test("snapshot response correlates document, node schema, and late responses", () => {
+  const issued = issueBrowserCommand(activeState(), {
+    command: "snapshot",
+    requestId: "snapshot-response",
+    target: { tabId: 7 },
+  });
+  const response = {
+    type: "snapshot_response",
+    ...identity("connection-a"),
+    request_id: "snapshot-response",
+    tab_id: 7,
+    document: { loader_id: "loader-a" },
+    nodes: [{
+      ref: 1,
+      parent_ref: null,
+      backend_dom_node_id: 10,
+      role: "document",
+      name: "Example",
+      value: null,
+      state: { disabled: false, expanded: false, focused: true, hidden: false },
+    }],
+    truncated: false,
+    partial: false,
+  };
+  const completed = reducePairingMessage(issued.state, response);
+  assert.deepEqual(completed.effects, [{
+    type: "browser_resolved",
+    requestId: "snapshot-response",
+    response: {
+      ok: true,
+      tab_id: 7,
+      document: response.document,
+      nodes: response.nodes,
+      truncated: false,
+      partial: false,
+    },
+  }]);
+
+  const pending = issueBrowserCommand(activeState(), {
+    command: "snapshot",
+    requestId: "snapshot-late",
+    target: { tabId: 7 },
+  });
+  const cancelled = cancelBrowserCommand(pending.state, "snapshot-late");
+  assert.throws(() => reducePairingMessage(cancelled.state, { ...response, request_id: "snapshot-late" }), PairingProtocolError);
+  assert.throws(() => reducePairingMessage(issued.state, { ...response, tab_id: 8 }), PairingProtocolError);
+  assert.throws(() => reducePairingMessage(issued.state, {
+    ...response,
+    nodes: [{ ...response.nodes[0], parent_ref: 1 }],
+  }), PairingProtocolError);
+});
+
+test("snapshot commands stay separated by A/B identity bindings", () => {
+  const descriptorB = { ...descriptor, session_id: "session-b", browser_instance_id: "browser-b", profile_instance_id: "profile-b" };
+  const stateB = reducePairingMessage(
+    reducePairingMessage(createPairingState(descriptorB), { ...register(), session_id: descriptorB.session_id, browser_instance_id: descriptorB.browser_instance_id, profile_instance_id: descriptorB.profile_instance_id }).state,
+    { ...ack(), session_id: descriptorB.session_id, browser_instance_id: descriptorB.browser_instance_id, profile_instance_id: descriptorB.profile_instance_id },
+  ).state;
+  const a = issueBrowserCommand(activeState(), { command: "snapshot", requestId: "snapshot-a", target: { tabId: 7 } });
+  const b = issueBrowserCommand(stateB, { command: "snapshot", requestId: "snapshot-b", target: { tabId: 8 } });
+  assert.equal(a.effects[0].connectionId, "connection-a");
+  assert.equal(b.effects[0].connectionId, "connection-a");
+  assert.equal(a.effects[0].message.session_id, descriptor.session_id);
+  assert.equal(b.effects[0].message.session_id, descriptorB.session_id);
+  assert.equal(a.effects[0].message.tab_id, 7);
+  assert.equal(b.effects[0].message.tab_id, 8);
+});
+
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {
   const boundary = new Date(descriptor.expires_at);
   const issued = expirePairingState(createPairingState(descriptor), boundary);

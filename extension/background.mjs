@@ -9,8 +9,11 @@ import {
   respondToBrowserStatus,
   respondToTabsList,
   respondToNavigate,
+  respondToSnapshot,
   validateNavigateRequest,
+  validateSnapshotRequest,
 } from "./pairing-protocol.mjs";
+import { createDebuggerSnapshotRunner, SNAPSHOT_ERROR_CODES } from "./debugger-snapshot.mjs";
 import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
 const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
@@ -46,6 +49,7 @@ export function createPairingController({
   let binding = null;
   let challenge = null;
   let activeConnectionId = null;
+  const snapshotRunner = createDebuggerSnapshotRunner({ chromeApi });
 
   const clearRetry = () => {
     if (retryTimer !== null) {
@@ -161,6 +165,21 @@ export function createPairingController({
             }
             if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
             target.postMessage(respondToNavigate(message, binding, activeConnectionId, navigation.tabId));
+          }
+        } else if (message?.type === "snapshot_request") {
+          const snapshotTarget = validateSnapshotRequest(message, binding, activeConnectionId);
+          try {
+            const snapshot = await snapshotRunner.snapshot(snapshotTarget.tabId);
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            target.postMessage(respondToSnapshot(message, binding, activeConnectionId, snapshot));
+          } catch (error) {
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            const errorCode = error?.code === "response_too_large"
+              ? "response_too_large"
+              : SNAPSHOT_ERROR_CODES.includes(error?.code)
+                ? error.code
+                : "snapshot_failed";
+            target.postMessage(respondToBrowserError(message, binding, activeConnectionId, "snapshot", errorCode));
           }
         } else {
           throw new Error("unexpected active protocol message");

@@ -43,6 +43,13 @@ test("pairing CLI parses navigate arguments strictly and canonicalizes accepted 
   }
 });
 
+test("pairing CLI parses snapshot with an explicit safe tab id", () => {
+  assert.deepEqual(parseInteractiveCommand("snapshot 7"), { type: "snapshot", tabId: 7 });
+  for (const command of ["snapshot", "snapshot 07", "snapshot -1", "snapshot 7 extra", `snapshot ${Number.MAX_SAFE_INTEGER + 1}`]) {
+    assert.equal(parseInteractiveCommand(command), null);
+  }
+});
+
 test("pairing CLI reports status, rejects unknown commands, and closes once on quit", async () => {
   const output = writableCapture();
   const errorOutput = writableCapture();
@@ -164,6 +171,46 @@ test("pairing CLI dispatches navigate with exact arguments and never echoes its 
   }]);
   assert.equal(output.value(), "ready poc-a ISSUED\n{\"command\":\"navigate\",\"generation\":3,\"tab_id\":7,\"accepted\":true}\nerror invalid_navigate\n");
   assert.equal(output.value().includes("example.test"), false);
+  assert.equal(output.value().includes("lease-must-not-print"), false);
+});
+
+test("pairing CLI prints only structured snapshot content", async () => {
+  const output = writableCapture();
+  const calls = [];
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["snapshot 7", "snapshot 07", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    createRequestId: () => "request-snapshot",
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestSnapshot(options) {
+          calls.push(options);
+          return {
+            generation: 3,
+            lease_id: "lease-must-not-print",
+            tab_id: 7,
+            document: { loader_id: "loader-a" },
+            nodes: [],
+            truncated: false,
+            partial: false,
+          };
+        },
+      },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [{ requestId: "request-snapshot", tabId: 7, timeoutMs: 1_000 }]);
+  assert.equal(output.value(), [
+    "ready poc-a ISSUED",
+    '{"command":"snapshot","generation":3,"tab_id":7,"document":{"loader_id":"loader-a"},"nodes":[],"truncated":false,"partial":false}',
+    "error invalid_snapshot",
+    "",
+  ].join("\n"));
   assert.equal(output.value().includes("lease-must-not-print"), false);
 });
 

@@ -21,6 +21,11 @@ export function parseInteractiveCommand(line) {
     return { type: line };
   }
   const parts = typeof line === "string" ? line.split(" ") : [];
+  if (parts.length === 2 && parts[0] === "snapshot" && /^(0|[1-9]\d*)$/.test(parts[1])) {
+    const tabId = Number(parts[1]);
+    if (Number.isSafeInteger(tabId)) return { type: "snapshot", tabId };
+    return null;
+  }
   if (parts.length === 3 && parts[0] === "navigate" && /^(0|[1-9]\d*)$/.test(parts[1])) {
     const tabId = Number(parts[1]);
     try {
@@ -104,6 +109,25 @@ export async function runPairingSession({
         } catch {
           output.write("navigate failed\n");
         }
+      } else if (interactive?.type === "snapshot") {
+        try {
+          const result = await harness.server.requestSnapshot({
+            requestId: createRequestId(),
+            tabId: interactive.tabId,
+            timeoutMs: 1_000,
+          });
+          output.write(`${JSON.stringify({
+            command: "snapshot",
+            generation: result.generation,
+            tab_id: result.tab_id,
+            document: result.document,
+            nodes: result.nodes,
+            truncated: result.truncated,
+            partial: result.partial,
+          })}\n`);
+        } catch {
+          output.write("snapshot failed\n");
+        }
       } else if (interactive?.type === "disconnect-active-host") {
         try {
           harness.server.disconnectActiveHost();
@@ -114,7 +138,11 @@ export async function runPairingSession({
       } else if (interactive?.type === "quit") {
         break;
       } else {
-        output.write(`${typeof line === "string" && line.startsWith("navigate") ? "error invalid_navigate" : "error unknown_command"}\n`);
+        output.write(`${typeof line === "string" && line.startsWith("navigate")
+          ? "error invalid_navigate"
+          : typeof line === "string" && line.startsWith("snapshot")
+            ? "error invalid_snapshot"
+            : "error unknown_command"}\n`);
       }
     }
   } finally {

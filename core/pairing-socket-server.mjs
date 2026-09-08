@@ -155,6 +155,10 @@ export class PairingSocketServer {
     return this.requestBrowserCommand({ command: "navigate", requestId, target: { tabId, url }, timeoutMs });
   }
 
+  requestSnapshot({ requestId, tabId, timeoutMs = 1_000 }) {
+    return this.requestBrowserCommand({ command: "snapshot", requestId, target: { tabId }, timeoutMs });
+  }
+
   /**
    * PoC-only fault injection for an ACTIVE Native Host transport. The listener,
    * descriptor, and every other instance remain available for that Host's resume.

@@ -131,7 +131,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 3: 最小browser tool
 
-進捗: **実装中**（2026-09-07）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`も自動テストとA/B近接並行の実Chrome試験でこの作業単位の合格を確認した（[Gate 3 navigate実機試験結果](./gate-3-navigate-results.md)）。`snapshot`以降は未実装のため、Gate 3全体は引き続き実装中とする。
+進捗: **実装中**（2026-09-08）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`も自動テストとA/B近接並行の実Chrome試験でこの作業単位の合格を確認した（[Gate 3 navigate実機試験結果](./gate-3-navigate-results.md)）。`snapshot`の自動テスト実装まで完了したが、実Chrome試験は未実施であり、`click`以降も未実装のためGate 3全体は引き続き未合格とする。
 
 実装順:
 
@@ -155,6 +155,19 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 - `navigate`は非負safe integerの明示`tab_id`と、8,192 JavaScript文字以下の`http`/`https`絶対URLだけを受ける。ASCII制御文字、位置を問わないUnicode whitespace、URL中のusername/password、他schemeは拒否する（`%20`などpercent-encoding済みの表現は許可）。URL parserの`href`へcanonical化し、そのcanonical URLも同じ8,192文字上限で再検証してからcore requestと`chrome.tabs.update`の両方に用いる。通常のerrorや記録へURL・認証情報を出さない。Extensionはそのprofile内で`chrome.tabs.get`によりtabの存在を確認してから`chrome.tabs.update(tab_id, { url })`を呼ぶ。tab未検出は`tab_not_found`、Chrome API失敗は`navigation_failed`だけを返す。
 - `navigate`はmutationであるため、timeoutまたはtransport喪失時の結果は`outcome_unknown`とし、自動retryしない。responseはrequestのtab IDを含めて相関し、遅延responseはfenceされる。
 - PoCでは遅延responseとの衝突を避けるため、generationごとに最大4,096件のbrowser command request IDを保持する。この上限に達したgenerationは新規commandを拒否する。
+
+`snapshot <tab-id>` は読み取り専用の最初のAccessibility取得コマンドである。Extensionは明示したtabを`tabs.get`で確認した後、`chrome.debugger.attach({tabId}, "1.3")`を行い、自分のattach中だけ次の順でCDPを呼ぶ。
+
+この機能のためManifest V3に`debugger` permissionを追加した。既存のunpacked Extensionは権限再承認または再読み込みが必要であり、実Chromeでの再承認試験はまだ実施しない。
+
+```text
+Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
+  → Accessibility.disable（enable成功時） → chrome.debugger.detach
+```
+
+同じExtension connection内の同一tabへの実行は`debugger_busy`で拒否する。attachに失敗した場合はdetachを試みず、CDP、tab、detachの詳細エラーは返さない。取得後であってもdisableまたはdetachに失敗した場合は`debugger_detach_failed`として成功を返さない。固定error codeは`debugger_unavailable`、`tab_not_found`、`debugger_busy`、`debugger_attach_failed`、`snapshot_failed`、`debugger_detach_failed`、`response_too_large`である。
+
+返却するsnapshotはraw CDPを含まず、`document.loader_id`（root frameのloader ID）、`tab_id`、最大100件の連番`ref`、`parent_ref`、`backend_dom_node_id`、`role`、`name`、`value`、`state`（`disabled`、`expanded`、`focused`、`hidden`のbooleanだけ）で構成する。文字列は512文字、木の深さは16、response全体は64 KiB以内に制限し、欠落・上限による省略は`partial`または`truncated`で示す。parentを除外したnodeや循環参照を出力せず、validatorが受理できる連番refとparentだけを生成する。対象documentは取得時のloader IDに束縛されるため、navigation後はsnapshotのdocument/ref/backend DOM参照をstaleとして再利用せず、再取得する。PoCではroot frameだけを対象とし、OOPIFの別frame sessionをattachして取得しない。
 
 合格条件:
 

@@ -203,6 +203,51 @@ test("browser_status and tabs_list stay correlated to the active instance and ex
     accepted: true,
   });
 
+  const snapshot = fixture.server.requestSnapshot({ requestId: "snapshot-1", tabId: 7, timeoutMs: 1_000 });
+  assert.deepEqual(await client.next(), message(fixture.descriptor, "snapshot_request", "connection-a", {
+    request_id: "snapshot-1",
+    tab_id: 7,
+  }));
+  client.send(encodeNativeMessage(message(fixture.descriptor, "snapshot_response", "connection-a", {
+    request_id: "snapshot-1",
+    tab_id: 7,
+    document: { loader_id: "loader-a" },
+    nodes: [{
+      ref: 1,
+      parent_ref: null,
+      backend_dom_node_id: null,
+      role: "document",
+      name: "Example",
+      value: null,
+      state: { disabled: false, expanded: false, focused: false, hidden: false },
+    }],
+    truncated: false,
+    partial: false,
+  })));
+  assert.deepEqual(await snapshot, {
+    request_id: "snapshot-1",
+    command: "snapshot",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.descriptor.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    tab_id: 7,
+    document: { loader_id: "loader-a" },
+    nodes: [{
+      ref: 1,
+      parent_ref: null,
+      backend_dom_node_id: null,
+      role: "document",
+      name: "Example",
+      value: null,
+      state: { disabled: false, expanded: false, focused: false, hidden: false },
+    }],
+    truncated: false,
+    partial: false,
+  });
+
   const navigationTimeout = fixture.server.requestNavigate({
     requestId: "navigate-timeout",
     tabId: 7,
@@ -213,6 +258,14 @@ test("browser_status and tabs_list stay correlated to the active instance and ex
   await assert.rejects(navigationTimeout, (error) => error.code === "outcome_unknown");
   assert.throws(
     () => fixture.server.requestNavigate({ requestId: "navigate-timeout", tabId: 7, url: "https://example.test/", timeoutMs: 1 }),
+    /request id is already pending/,
+  );
+
+  const snapshotTimeout = fixture.server.requestSnapshot({ requestId: "snapshot-timeout", tabId: 7, timeoutMs: 1 });
+  assert.equal((await client.next()).request_id, "snapshot-timeout");
+  await assert.rejects(snapshotTimeout, (error) => error.code === "timeout");
+  assert.throws(
+    () => fixture.server.requestSnapshot({ requestId: "snapshot-timeout", tabId: 7, timeoutMs: 1 }),
     /request id is already pending/,
   );
 
@@ -249,6 +302,29 @@ test("invalid JSON and oversized frames are rejected without changing an issued 
   oversized.send(header);
   await oversizedClosed;
   assert.equal(fixture.server.state.phase, "ISSUED");
+});
+
+test("a late snapshot response after timeout fences the session socket", async (t) => {
+  const fixture = await serverFixture("poc-a", "232323232323");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const snapshot = fixture.server.requestSnapshot({ requestId: "late-snapshot", tabId: 7, timeoutMs: 1 });
+  assert.equal((await client.next()).request_id, "late-snapshot");
+  await assert.rejects(snapshot, (error) => error.code === "timeout");
+  const closed = once(client.socket, "close");
+  client.send(encodeNativeMessage(message(fixture.descriptor, "snapshot_response", "connection-a", {
+    request_id: "late-snapshot",
+    tab_id: 7,
+    document: { loader_id: "loader-late" },
+    nodes: [],
+    truncated: false,
+    partial: false,
+  })));
+  await closed;
 });
 
 test("an existing path is preserved and a server removes only its own socket on close", async (t) => {
@@ -316,6 +392,30 @@ test("concurrent A and B navigate requests remain on their descriptor-selected s
   assert.equal(bResult.tab_id, 8);
   assert.equal(aResult.browser_instance_id, a.descriptor.browser_instance_id);
   assert.equal(bResult.browser_instance_id, b.descriptor.browser_instance_id);
+
+  const aSnapshot = a.server.requestSnapshot({ requestId: "snapshot-a", tabId: 7 });
+  const bSnapshot = b.server.requestSnapshot({ requestId: "snapshot-b", tabId: 8 });
+  assert.deepEqual(await aClient.next(), message(a.descriptor, "snapshot_request", "connection-a", {
+    request_id: "snapshot-a", tab_id: 7,
+  }));
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "snapshot_request", "connection-a", {
+    request_id: "snapshot-b", tab_id: 8,
+  }));
+  const snapshotPayload = (requestId, tabId) => ({
+    request_id: requestId,
+    tab_id: tabId,
+    document: { loader_id: `loader-${tabId}` },
+    nodes: [],
+    truncated: false,
+    partial: false,
+  });
+  aClient.send(encodeNativeMessage(message(a.descriptor, "snapshot_response", "connection-a", snapshotPayload("snapshot-a", 7))));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "snapshot_response", "connection-a", snapshotPayload("snapshot-b", 8))));
+  const [aSnapshotResult, bSnapshotResult] = await Promise.all([aSnapshot, bSnapshot]);
+  assert.equal(aSnapshotResult.document.loader_id, "loader-7");
+  assert.equal(bSnapshotResult.document.loader_id, "loader-8");
+  assert.equal(aSnapshotResult.browser_instance_id, a.descriptor.browser_instance_id);
+  assert.equal(bSnapshotResult.browser_instance_id, b.descriptor.browser_instance_id);
 });
 
 test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {
