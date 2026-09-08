@@ -31,7 +31,13 @@ export const NATIVE_HOST_FAILURE_SCHEMA_VERSION = 1;
 export const NATIVE_HOST_FAILURE_MARKER_FILENAME = "native-host-last-failure.json";
 export const NATIVE_HOST_FAILURE_STAGES = Object.freeze([
   "setup",
-  "handshake",
+  "handshake_send_register",
+  "handshake_receive_challenge",
+  "handshake_write_challenge",
+  "handshake_validate_ack",
+  "handshake_send_ack",
+  "handshake_receive_active",
+  "handshake_write_active",
   "active_request_to_extension",
   "active_response_to_socket",
   "input_closed",
@@ -363,20 +369,27 @@ export async function runPairingNativeHost({
 
     const decoder = new NativeMessageDecoder({ maxBytes: MAX_EXTENSION_TO_HOST_BYTES });
     for await (const chunk of input) {
-      failureStage = phase === "ACTIVE" ? "active_response_to_socket" : "handshake";
+      failureStage = phase === "ACTIVE"
+        ? "active_response_to_socket"
+        : phase === "START"
+          ? "handshake_send_register"
+          : "handshake_validate_ack";
       failureReason = "validation";
       for (const message of decoder.push(chunk)) {
         if (phase === "START") {
           let pairingMode;
+          failureStage = "handshake_send_register";
+          failureReason = "validation";
           if (message?.type === "pair_start") {
             assertPairStart(message);
             pairingMode = "initial";
-            failureReason = "transport";
-            bridge.send({
+            const register = {
               type: "host_register",
               ...descriptorIdentity(descriptor, hostConnectionId),
               pairing_nonce: descriptor.pairing_nonce,
-            });
+            };
+            failureReason = "transport";
+            bridge.send(register);
           } else if (message?.type === "resume_start") {
             assertResumeStart(message, descriptor);
             pairingMode = "resume";
@@ -385,23 +398,28 @@ export async function runPairingNativeHost({
           } else {
             throw new Error("unexpected pairing start");
           }
-          failureStage = "handshake";
+          failureStage = "handshake_receive_challenge";
           failureReason = "transport";
           const challenge = await bridge.receive();
           failureReason = "validation";
           assertPairChallenge(challenge, descriptor, hostConnectionId, pairingMode);
+          failureStage = "handshake_write_challenge";
           failureReason = "transport";
           nativeWrite(output, challenge);
           phase = "AWAIT_ACK";
         } else if (phase === "AWAIT_ACK") {
-          failureStage = "handshake";
+          failureStage = "handshake_validate_ack";
           failureReason = "validation";
           assertPairAck(message, descriptor, hostConnectionId);
+          failureStage = "handshake_send_ack";
           failureReason = "transport";
           bridge.send(message);
+          failureStage = "handshake_receive_active";
+          failureReason = "transport";
           const active = await bridge.receive();
           failureReason = "validation";
           assertPairActive(active, descriptor, hostConnectionId);
+          failureStage = "handshake_write_active";
           failureReason = "transport";
           nativeWrite(output, active);
           phase = "ACTIVE";

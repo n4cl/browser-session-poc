@@ -324,6 +324,105 @@ test("pairing Native Host bridges partial initial frames through one descriptor-
   assert.equal(bridge.closed, true);
 });
 
+test("pairing Native Host identifies an active handshake receive failure without exposing the socket error", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-handshake-receive";
+  const challenge = {
+    type: "pair_challenge",
+    ...pairingIdentity(fixture.descriptor, connectionId),
+    pairing_mode: "initial",
+  };
+  let receives = 0;
+  const sent = [];
+  const failures = [];
+  const bridge = {
+    send(message) { sent.push(message); },
+    receive() {
+      receives += 1;
+      if (receives === 1) return Promise.resolve(challenge);
+      return Promise.reject(new Error("secret socket failure"));
+    },
+    close() {},
+  };
+  const input = new PassThrough();
+  const run = runPairingNativeHost({
+    input,
+    output: new PassThrough(),
+    stderr: new PassThrough(),
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    createUuid: () => connectionId,
+    socketConnector: async () => bridge,
+    recordFailure: async (marker) => failures.push(marker),
+    now: PAIRING_NOW,
+  });
+  input.end(Buffer.concat([
+    encodeNativeMessage({ type: "pair_start", protocol_version: 1 }),
+    encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) }),
+  ]));
+
+  assert.equal(await run, false);
+  assert.deepEqual(sent, [
+    {
+      type: "host_register",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_nonce: fixture.descriptor.pairing_nonce,
+    },
+    { type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) },
+  ]);
+  assert.deepEqual(failures.map(({ stage, reason }) => ({ stage, reason })), [{
+    stage: "handshake_receive_active",
+    reason: "transport",
+  }]);
+  assert.doesNotMatch(JSON.stringify(failures), /secret socket failure|session-a|nonce-a/);
+});
+
+test("pairing Native Host identifies active handshake output failure without exposing the write error", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-handshake-write";
+  const bridge = bridgeFor({
+    socket_path: fixture.descriptor.socket_path,
+    message: {
+      type: "pair_challenge",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_mode: "initial",
+    },
+  });
+  let writes = 0;
+  const failures = [];
+  const output = {
+    write() {
+      writes += 1;
+      if (writes === 2) throw new Error("secret output failure");
+    },
+  };
+  const input = new PassThrough();
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr: new PassThrough(),
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    createUuid: () => connectionId,
+    socketConnector: bridge.connector,
+    recordFailure: async (marker) => failures.push(marker),
+    now: PAIRING_NOW,
+  });
+  input.end(Buffer.concat([
+    encodeNativeMessage({ type: "pair_start", protocol_version: 1 }),
+    encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) }),
+  ]));
+
+  assert.equal(await run, false);
+  assert.deepEqual(failures.map(({ stage, reason }) => ({ stage, reason })), [{
+    stage: "handshake_write_active",
+    reason: "transport",
+  }]);
+  assert.doesNotMatch(JSON.stringify(failures), /secret output failure|session-a|nonce-a/);
+});
+
 test("pairing Native Host failure diagnostics use exact fields and do not expose protocol secrets", async () => {
   const fixture = await pairingFixture();
   const input = new PassThrough();
