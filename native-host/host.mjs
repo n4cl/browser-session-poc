@@ -200,15 +200,15 @@ function assertPing(message, descriptor, hostConnectionId, type) {
 function assertExtensionRequest(message, descriptor, hostConnectionId) {
   if (message?.type === "ping_request") {
     assertPing(message, descriptor, hostConnectionId, "ping_request");
-    return;
+    return { command: "ping", requestId: message.request_id };
   }
-  validateBrowserCommandRequest(message, { binding: descriptor, connectionId: hostConnectionId });
+  return validateBrowserCommandRequest(message, { binding: descriptor, connectionId: hostConnectionId });
 }
 
 function assertExtensionResponse(message, descriptor, hostConnectionId) {
   if (message?.type === "ping_response") {
     assertPing(message, descriptor, hostConnectionId, "ping_response");
-    return;
+    return { command: "ping", requestId: message.request_id };
   }
   const command = message?.type === "browser_status_response"
     ? "browser_status"
@@ -226,6 +226,7 @@ function assertExtensionResponse(message, descriptor, hostConnectionId) {
     connectionId: hostConnectionId,
     target: command === "snapshot" ? { tabId: message?.tab_id } : undefined,
   });
+  return { command, requestId: message?.request_id };
 }
 
 function nativeWrite(output, message) {
@@ -318,6 +319,7 @@ export async function runPairingNativeHost({
   let failureStage = "setup";
   let failureReason = "unexpected";
   let asynchronousFailure;
+  const pendingRequests = new Map();
   const reportFailure = async (stage, reason) => {
     if (!paths) return;
     const marker = {
@@ -412,9 +414,10 @@ export async function runPairingNativeHost({
                 pumpReason = "transport";
                 const request = await bridge.receive();
                 pumpReason = "validation";
-                assertExtensionRequest(request, descriptor, hostConnectionId);
+                const pending = assertExtensionRequest(request, descriptor, hostConnectionId);
                 pumpReason = "transport";
                 nativeWrite(output, request);
+                pendingRequests.set(pending.requestId, pending.command);
               }
             } catch {
               asynchronousFailure = { stage: pumpStage, reason: pumpReason };
@@ -424,15 +427,26 @@ export async function runPairingNativeHost({
         } else if (phase === "ACTIVE") {
           failureStage = "active_response_to_socket";
           failureReason = "validation";
-          assertExtensionResponse(message, descriptor, hostConnectionId);
+          const response = assertExtensionResponse(message, descriptor, hostConnectionId);
+          if (pendingRequests.get(response.requestId) !== response.command) {
+            throw new Error("browser response does not match a pending request");
+          }
           failureReason = "transport";
           bridge.send(message);
+          pendingRequests.delete(response.requestId);
         } else {
           throw new Error("unexpected pairing protocol message");
         }
       }
     }
-    if (phase === "ACTIVE") return true;
+    if (phase === "ACTIVE") {
+      if (pendingRequests.size > 0) {
+        await reportFailure("input_closed", "transport");
+        diagnostic(stderr, "rejected pairing protocol");
+        return false;
+      }
+      return true;
+    }
     await reportFailure("input_closed", "unexpected");
     diagnostic(stderr, "rejected pairing protocol");
     return false;

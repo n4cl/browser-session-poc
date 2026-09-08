@@ -410,6 +410,63 @@ test("pairing Native Host records an ACTIVE socket-to-Extension failure and igno
   assert.doesNotMatch(diagnostics, /diagnostic sink unavailable/);
 });
 
+test("pairing Native Host records input closure while an ACTIVE ping waits for Extension response", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const outputQueue = nativeOutputQueue(output);
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr: new PassThrough(),
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    createUuid: () => "connection-pending-eof",
+    now: PAIRING_NOW,
+  });
+
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal((await outputQueue.next()).type, "pair_challenge");
+  input.write(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-pending-eof") }));
+  assert.equal((await outputQueue.next()).type, "pair_active");
+
+  const ping = server.requestPing({ requestId: "active-ping-eof", timeoutMs: 1_000 });
+  assert.deepEqual(await outputQueue.next(), {
+    type: "ping_request",
+    ...pairingIdentity(fixture.descriptor, "connection-pending-eof"),
+    request_id: "active-ping-eof",
+  });
+  input.end();
+
+  assert.equal(await run, false);
+  await assert.rejects(ping);
+  const marker = JSON.parse(await readFile(
+    path.join(fixture.paths.instanceDir, NATIVE_HOST_FAILURE_MARKER_FILENAME),
+    "utf8",
+  ));
+  assert.deepEqual({ stage: marker.stage, reason: marker.reason }, {
+    stage: "input_closed",
+    reason: "transport",
+  });
+  assert.deepEqual(Object.keys(marker).sort(), [
+    "browser_instance_id",
+    "reason",
+    "recorded_at",
+    "schema_version",
+    "stage",
+  ]);
+});
+
 test("pairing Native Host normal ACTIVE input close does not create a failure marker", async () => {
   const fixture = await pairingFixture();
   const connectionId = "connection-normal-close";
