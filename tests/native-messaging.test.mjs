@@ -47,6 +47,25 @@ function collect(stream) {
   return () => Buffer.concat(chunks);
 }
 
+function nativeOutputQueue(stream) {
+  const decoder = new NativeMessageDecoder();
+  const messages = [];
+  const waiters = [];
+  stream.on("data", (chunk) => {
+    for (const message of decoder.push(chunk)) {
+      const waiter = waiters.shift();
+      if (waiter) waiter(message);
+      else messages.push(message);
+    }
+  });
+  return {
+    next() {
+      if (messages.length > 0) return Promise.resolve(messages.shift());
+      return new Promise((resolve) => waiters.push(resolve));
+    },
+  };
+}
+
 const PAIRING_NOW = new Date("2030-01-01T00:30:00.000Z");
 
 function pairingIdentity(descriptor, hostConnectionId) {
@@ -332,6 +351,134 @@ test("pairing Native Host reaches the descriptor-selected session socket without
   input.end(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-integration") }));
   assert.equal(await run, true);
   assert.equal(stderr.read(), null);
+});
+
+test("pairing Native Host forwards a valid snapshot response without exiting", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const outputQueue = nativeOutputQueue(output);
+  let settled = false;
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => "connection-snapshot",
+    now: PAIRING_NOW,
+  });
+  run.then(() => { settled = true; });
+
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal((await outputQueue.next()).type, "pair_challenge");
+  input.write(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-snapshot") }));
+  assert.equal((await outputQueue.next()).type, "pair_active");
+
+  const snapshot = server.requestSnapshot({ requestId: "native-snapshot", tabId: 7, timeoutMs: 1_000 });
+  assert.deepEqual(await outputQueue.next(), {
+    type: "snapshot_request",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-snapshot",
+    tab_id: 7,
+  });
+  input.write(encodeNativeMessage({
+    type: "snapshot_response",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-snapshot",
+    tab_id: 7,
+    document: { loader_id: "loader-native" },
+    nodes: [],
+    truncated: false,
+    partial: false,
+  }));
+  assert.deepEqual(await snapshot, {
+    request_id: "native-snapshot",
+    command: "snapshot",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.descriptor.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    tab_id: 7,
+    document: { loader_id: "loader-native" },
+    nodes: [],
+    truncated: false,
+    partial: false,
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(stderr.read(), null);
+  input.end();
+  assert.equal(await run, true);
+});
+
+test("pairing Native Host rejects an invalid snapshot schema", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const outputQueue = nativeOutputQueue(output);
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => "connection-invalid-snapshot",
+    now: PAIRING_NOW,
+  });
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal((await outputQueue.next()).type, "pair_challenge");
+  input.write(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-invalid-snapshot") }));
+  assert.equal((await outputQueue.next()).type, "pair_active");
+
+  const snapshot = server.requestSnapshot({ requestId: "invalid-native-snapshot", tabId: 7, timeoutMs: 1_000 });
+  assert.equal((await outputQueue.next()).type, "snapshot_request");
+  const rejected = assert.rejects(snapshot, (error) => error.code === "timeout");
+  input.write(encodeNativeMessage({
+    type: "snapshot_response",
+    ...pairingIdentity(fixture.descriptor, "connection-invalid-snapshot"),
+    request_id: "invalid-native-snapshot",
+    tab_id: 7,
+    document: { loader_id: "loader-invalid" },
+    nodes: [{
+      ref: 1,
+      parent_ref: 1,
+      backend_dom_node_id: null,
+      role: "document",
+      name: null,
+      value: null,
+      state: { disabled: false, expanded: false, focused: false, hidden: false },
+    }],
+    truncated: false,
+    partial: false,
+  }));
+  assert.equal(await run, false);
+  await rejected;
+  assert.match(stderr.read().toString("utf8"), /rejected pairing protocol/);
 });
 
 test("pairing Native Host validates resume bindings and cannot use another instance descriptor", async () => {

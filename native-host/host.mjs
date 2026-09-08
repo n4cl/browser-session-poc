@@ -176,6 +176,7 @@ function assertExtensionResponse(message, descriptor, hostConnectionId) {
     requestId: message?.request_id,
     binding: descriptor,
     connectionId: hostConnectionId,
+    target: command === "snapshot" ? { tabId: message?.tab_id } : undefined,
   });
 }
 
