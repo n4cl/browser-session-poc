@@ -160,6 +160,12 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 この機能のためManifest V3に`debugger` permissionを追加した。既存のunpacked Extensionは権限再承認または再読み込みが必要であり、実Chromeでの再承認試験はまだ実施しない。
 
+pairing modeのNative Host終了原因を実機PoCで切り分けるため、失敗時だけinstance専用の
+`.runtime/instances/<instance-id>/native-host-last-failure.json`へ最小診断markerをatomicに記録する。
+markerは`schema_version`、`browser_instance_id`、固定enumの`stage`/`reason`、`recorded_at`だけを持ち、
+session・lease・nonce・request・URL・例外・path・Chrome errorなどの機密値は記録しない。通常のACTIVE接続終了では作成せず、
+診断書込み失敗は本体の接続結果を隠さない。
+
 ```text
 Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
   → Accessibility.disable（enable成功時） → chrome.debugger.detach

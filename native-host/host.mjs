@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,21 @@ export const GATE_1_NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
 export const GATE_1_PROTOCOL_VERSION = 1;
 export { PAIRING_PROTOCOL_VERSION } from "../core/pairing-protocol.mjs";
 
+export const NATIVE_HOST_FAILURE_SCHEMA_VERSION = 1;
+export const NATIVE_HOST_FAILURE_MARKER_FILENAME = "native-host-last-failure.json";
+export const NATIVE_HOST_FAILURE_STAGES = Object.freeze([
+  "setup",
+  "handshake",
+  "active_request_to_extension",
+  "active_response_to_socket",
+  "input_closed",
+]);
+export const NATIVE_HOST_FAILURE_REASONS = Object.freeze([
+  "validation",
+  "transport",
+  "unexpected",
+]);
+
 function runtimeRoot() {
   return process.env.BROWSER_POC_RUNTIME_ROOT
     ? path.resolve(process.env.BROWSER_POC_RUNTIME_ROOT)
@@ -51,6 +66,39 @@ export async function writeSuccessMarker(markerPath) {
 
 function diagnostic(stderr, message) {
   stderr.write(`[browser-session-poc native-host] ${message}\n`);
+}
+
+async function recordNativeHostFailure(marker, { runtimeRoot, instanceId }) {
+  if (
+    !marker ||
+    marker.schema_version !== NATIVE_HOST_FAILURE_SCHEMA_VERSION ||
+    marker.browser_instance_id !== instanceId ||
+    !NATIVE_HOST_FAILURE_STAGES.includes(marker.stage) ||
+    !NATIVE_HOST_FAILURE_REASONS.includes(marker.reason) ||
+    typeof marker.recorded_at !== "string"
+  ) {
+    throw new Error("invalid Native Host failure marker");
+  }
+  const markerPath = path.join(
+    path.resolve(runtimeRoot),
+    "instances",
+    instanceId,
+    NATIVE_HOST_FAILURE_MARKER_FILENAME,
+  );
+  await mkdir(path.dirname(markerPath), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${markerPath}.${randomUUID()}.tmp`;
+  let handle;
+  try {
+    handle = await open(temporaryPath, "wx", 0o600);
+    await handle.writeFile(`${JSON.stringify(marker)}\n`, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, markerPath);
+  } finally {
+    await handle?.close();
+    await rm(temporaryPath, { force: true });
+  }
 }
 
 function isNonEmptyString(value) {
@@ -261,36 +309,67 @@ export async function runPairingNativeHost({
   readProfile = readProfileMetadata,
   readDescriptor = readActivePairingDescriptor,
   socketConnector = connectPairingSocket,
+  recordFailure = recordNativeHostFailure,
   now = new Date(),
 }) {
-  if (origin !== GATE_1_EXTENSION_ORIGIN) {
-    diagnostic(stderr, "rejected unexpected extension origin");
-    return false;
-  }
-
+  let paths;
   let bridge;
+  let phase = "START";
+  let failureStage = "setup";
+  let failureReason = "unexpected";
+  let asynchronousFailure;
+  const reportFailure = async (stage, reason) => {
+    if (!paths) return;
+    const marker = {
+      schema_version: NATIVE_HOST_FAILURE_SCHEMA_VERSION,
+      browser_instance_id: paths.instanceId,
+      stage,
+      reason,
+      recorded_at: new Date().toISOString(),
+    };
+    try {
+      await recordFailure(marker, { runtimeRoot: paths.runtimeRoot, instanceId: paths.instanceId });
+    } catch {
+      diagnostic(stderr, "failure diagnostic unavailable");
+    }
+  };
+
   try {
-    const paths = resolvePairingPaths({ runtimeRoot: pairingRuntimeRoot, instanceId });
+    paths = resolvePairingPaths({ runtimeRoot: pairingRuntimeRoot, instanceId });
+    if (origin !== GATE_1_EXTENSION_ORIGIN) {
+      failureStage = "setup";
+      failureReason = "validation";
+      throw new Error("unexpected extension origin");
+    }
+
+    failureStage = "setup";
+    failureReason = "validation";
     const profile = await readProfile(paths);
     const descriptor = await readDescriptor(paths, { profileInstanceId: profile.profile_instance_id, now });
     const hostConnectionId = createUuid();
     if (!isNonEmptyString(hostConnectionId)) {
       throw new Error("invalid host connection id");
     }
+
+    failureStage = "setup";
+    failureReason = "transport";
     bridge = await socketConnector({ socketPath: descriptor.socket_path });
     if (!bridge || typeof bridge.send !== "function" || typeof bridge.receive !== "function" || typeof bridge.close !== "function") {
+      failureReason = "validation";
       throw new Error("invalid pairing socket connector");
     }
 
     const decoder = new NativeMessageDecoder({ maxBytes: MAX_EXTENSION_TO_HOST_BYTES });
-    let phase = "START";
     for await (const chunk of input) {
+      failureStage = phase === "ACTIVE" ? "active_response_to_socket" : "handshake";
+      failureReason = "validation";
       for (const message of decoder.push(chunk)) {
         if (phase === "START") {
           let pairingMode;
           if (message?.type === "pair_start") {
             assertPairStart(message);
             pairingMode = "initial";
+            failureReason = "transport";
             bridge.send({
               type: "host_register",
               ...descriptorIdentity(descriptor, hostConnectionId),
@@ -299,42 +378,67 @@ export async function runPairingNativeHost({
           } else if (message?.type === "resume_start") {
             assertResumeStart(message, descriptor);
             pairingMode = "resume";
+            failureReason = "transport";
             bridge.send({ type: "resume", ...descriptorIdentity(descriptor, hostConnectionId) });
           } else {
             throw new Error("unexpected pairing start");
           }
+          failureStage = "handshake";
+          failureReason = "transport";
           const challenge = await bridge.receive();
+          failureReason = "validation";
           assertPairChallenge(challenge, descriptor, hostConnectionId, pairingMode);
+          failureReason = "transport";
           nativeWrite(output, challenge);
           phase = "AWAIT_ACK";
         } else if (phase === "AWAIT_ACK") {
+          failureStage = "handshake";
+          failureReason = "validation";
           assertPairAck(message, descriptor, hostConnectionId);
+          failureReason = "transport";
           bridge.send(message);
           const active = await bridge.receive();
+          failureReason = "validation";
           assertPairActive(active, descriptor, hostConnectionId);
+          failureReason = "transport";
           nativeWrite(output, active);
           phase = "ACTIVE";
           void (async () => {
+            let pumpStage = "active_request_to_extension";
+            let pumpReason = "transport";
             try {
               while (phase === "ACTIVE") {
+                pumpStage = "active_request_to_extension";
+                pumpReason = "transport";
                 const request = await bridge.receive();
+                pumpReason = "validation";
                 assertExtensionRequest(request, descriptor, hostConnectionId);
+                pumpReason = "transport";
                 nativeWrite(output, request);
               }
             } catch {
+              asynchronousFailure = { stage: pumpStage, reason: pumpReason };
               if (!input.readableEnded) input.destroy(new Error("pairing socket closed"));
             }
           })();
         } else if (phase === "ACTIVE") {
+          failureStage = "active_response_to_socket";
+          failureReason = "validation";
           assertExtensionResponse(message, descriptor, hostConnectionId);
+          failureReason = "transport";
           bridge.send(message);
         } else {
           throw new Error("unexpected pairing protocol message");
         }
       }
     }
-    return phase === "ACTIVE";
+    if (phase === "ACTIVE") return true;
+    await reportFailure("input_closed", "unexpected");
+    diagnostic(stderr, "rejected pairing protocol");
+    return false;
   } catch {
+    const failure = asynchronousFailure ?? { stage: failureStage, reason: failureReason };
+    await reportFailure(failure.stage, failure.reason);
     diagnostic(stderr, "rejected pairing protocol");
     return false;
   } finally {

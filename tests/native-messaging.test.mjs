@@ -23,6 +23,10 @@ import {
   NativeMessageDecoder,
 } from "../native-host/codec.mjs";
 import {
+  NATIVE_HOST_FAILURE_MARKER_FILENAME,
+  NATIVE_HOST_FAILURE_REASONS,
+  NATIVE_HOST_FAILURE_SCHEMA_VERSION,
+  NATIVE_HOST_FAILURE_STAGES,
   parseNativeHostArguments,
   connectPairingSocket,
   runNativeHost,
@@ -318,6 +322,126 @@ test("pairing Native Host bridges partial initial frames through one descriptor-
   ]);
   assert.equal(diagnostics().length, 0);
   assert.equal(bridge.closed, true);
+});
+
+test("pairing Native Host failure diagnostics use exact fields and do not expose protocol secrets", async () => {
+  const fixture = await pairingFixture();
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  input.end(encodeNativeMessage({ type: "unexpected", session_id: "secret-session", request_id: "secret-request" }));
+
+  assert.equal(await runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    socketConnector: async () => { throw new Error("secret socket error"); },
+    now: PAIRING_NOW,
+  }), false);
+
+  const markerPath = path.join(fixture.paths.instanceDir, NATIVE_HOST_FAILURE_MARKER_FILENAME);
+  const marker = JSON.parse(await readFile(markerPath, "utf8"));
+  assert.deepEqual(Object.keys(marker).sort(), [
+    "browser_instance_id",
+    "reason",
+    "recorded_at",
+    "schema_version",
+    "stage",
+  ]);
+  assert.equal(marker.schema_version, NATIVE_HOST_FAILURE_SCHEMA_VERSION);
+  assert.equal(marker.browser_instance_id, fixture.paths.instanceId);
+  assert.ok(NATIVE_HOST_FAILURE_STAGES.includes(marker.stage));
+  assert.ok(NATIVE_HOST_FAILURE_REASONS.includes(marker.reason));
+  assert.match(marker.recorded_at, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal((await stat(markerPath)).mode & 0o777, 0o600);
+  assert.doesNotMatch(await readFile(markerPath, "utf8"), /secret-session|secret-request|secret socket error/);
+});
+
+test("pairing Native Host records an ACTIVE socket-to-Extension failure and ignores diagnostic writer errors", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  input.on("error", () => {});
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const diagnosticsBytes = collect(stderr);
+  const outputQueue = nativeOutputQueue(output);
+  const failures = [];
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    createUuid: () => "connection-diagnostic",
+    recordFailure: async (marker) => {
+      failures.push(marker);
+      throw new Error("diagnostic sink unavailable");
+    },
+    now: PAIRING_NOW,
+  });
+
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal((await outputQueue.next()).type, "pair_challenge");
+  input.write(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-diagnostic") }));
+  assert.equal((await outputQueue.next()).type, "pair_active");
+  server.disconnectActiveHost();
+
+  assert.equal(await run, false);
+  assert.deepEqual(failures.map(({ stage, reason }) => ({ stage, reason })), [{
+    stage: "active_request_to_extension",
+    reason: "transport",
+  }]);
+  const diagnostics = diagnosticsBytes().toString("utf8");
+  assert.match(diagnostics, /rejected pairing protocol/);
+  assert.match(diagnostics, /failure diagnostic unavailable/);
+  assert.doesNotMatch(diagnostics, /diagnostic sink unavailable/);
+});
+
+test("pairing Native Host normal ACTIVE input close does not create a failure marker", async () => {
+  const fixture = await pairingFixture();
+  const connectionId = "connection-normal-close";
+  const bridge = bridgeFor({
+    socket_path: fixture.descriptor.socket_path,
+    message: {
+      type: "pair_challenge",
+      ...pairingIdentity(fixture.descriptor, connectionId),
+      pairing_mode: "initial",
+    },
+  });
+  const input = new PassThrough();
+  const run = runPairingNativeHost({
+    input,
+    output: new PassThrough(),
+    stderr: new PassThrough(),
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: fixture.paths.instanceId,
+    createUuid: () => connectionId,
+    socketConnector: bridge.connector,
+    now: PAIRING_NOW,
+  });
+  input.end(Buffer.concat([
+    encodeNativeMessage({ type: "pair_start", protocol_version: 1 }),
+    encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, connectionId) }),
+  ]));
+  assert.equal(await run, true);
+  await assert.rejects(
+    readFile(path.join(fixture.paths.instanceDir, NATIVE_HOST_FAILURE_MARKER_FILENAME)),
+    { code: "ENOENT" },
+  );
 });
 
 test("pairing Native Host reaches the descriptor-selected session socket without a connector override", async (t) => {
