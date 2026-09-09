@@ -151,6 +151,66 @@ test("snapshot normalization produces bounded contiguous refs and hides raw AX f
   }), { ok: true, ...snapshot });
 });
 
+test("snapshot normalization reparents accessible descendants around ignored AX nodes", () => {
+  const snapshot = normalizeSnapshot({
+    tabId: 7,
+    frameTree: { frame: { id: "root-frame", loaderId: "loader-a" } },
+    axNodes: [
+      node("root", undefined, {
+        frameId: "root-frame",
+        role: { value: "RootWebArea" },
+        childIds: ["ignored-a"],
+      }),
+      node("ignored-a", "root", {
+        frameId: "root-frame",
+        ignored: true,
+        childIds: ["ignored-b"],
+      }),
+      node("ignored-b", "ignored-a", {
+        frameId: "root-frame",
+        ignored: true,
+        childIds: ["child"],
+      }),
+      node("child", "ignored-b", {
+        frameId: "root-frame",
+        role: { value: "heading" },
+      }),
+    ],
+  });
+
+  assert.deepEqual(snapshot.nodes.map(({ role, ref, parent_ref }) => ({ role, ref, parent_ref })), [
+    { role: "RootWebArea", ref: 1, parent_ref: null },
+    { role: "heading", ref: 2, parent_ref: 1 },
+  ]);
+  assert.equal(snapshot.truncated, true);
+  assert.equal(snapshot.partial, false);
+});
+
+test("snapshot normalization fails closed for broken ignored ancestry and OOPIF parents", () => {
+  const snapshot = normalizeSnapshot({
+    tabId: 7,
+    frameTree: { frame: { id: "root-frame", loaderId: "loader-a" } },
+    axNodes: [
+      node("root", undefined, { frameId: "root-frame", role: { value: "RootWebArea" } }),
+      node("cycle-a", "cycle-b", { frameId: "root-frame", ignored: true }),
+      node("cycle-b", "cycle-a", { frameId: "root-frame", ignored: true }),
+      node("cycle-child", "cycle-a", { frameId: "root-frame" }),
+      node("unknown-child", "missing-parent", { frameId: "root-frame" }),
+      node("excluded-parent", "root", { frameId: "root-frame", role: { value: null } }),
+      node("excluded-child", "excluded-parent", { frameId: "root-frame" }),
+      node("oopif-parent", "root", { frameId: "oopif-frame", role: { value: "generic" } }),
+      node("oopif-child", "oopif-parent", { frameId: "root-frame" }),
+    ],
+  });
+
+  assert.deepEqual(snapshot.nodes.map(({ ref, parent_ref }) => ({ ref, parent_ref })), [
+    { ref: 1, parent_ref: null },
+  ]);
+  assert.equal(snapshot.truncated, true);
+  assert.equal(snapshot.partial, true);
+  assert.equal(snapshot.nodes.some(({ parent_ref }) => parent_ref !== null && parent_ref !== 1), false);
+});
+
 test("snapshot normalization handles cycles, missing parents, depth, node and text bounds", () => {
   const deep = [];
   for (let index = 0; index < 20; index += 1) {
@@ -218,6 +278,44 @@ test("debugger snapshot follows attach/CDP/disable/detach order", async () => {
     ["sendCommand", { tabId: 7 }, "Accessibility.disable"],
     ["detach", { tabId: 7 }],
   ]);
+});
+
+test("debugger snapshot handles official frameTree and AX nodes response shapes", async () => {
+  const { api } = apiFixture({
+    sendCommand(_target, method) {
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { id: "root-frame", loaderId: "loader-a" } } };
+      }
+      if (method === "Accessibility.getFullAXTree") {
+        return {
+          nodes: [
+            node("root", undefined, {
+              frameId: "root-frame",
+              role: { value: "RootWebArea" },
+              childIds: ["ignored", "heading"],
+            }),
+            node("ignored", "root", {
+              frameId: "root-frame",
+              ignored: true,
+              childIds: ["heading"],
+            }),
+            node("heading", "ignored", {
+              frameId: "root-frame",
+              role: { value: "heading" },
+            }),
+          ],
+        };
+      }
+      return {};
+    },
+  });
+
+  const snapshot = await createDebuggerSnapshotRunner({ chromeApi: api }).snapshot(7);
+  assert.deepEqual(snapshot.nodes.map(({ role, parent_ref }) => ({ role, parent_ref })), [
+    { role: "RootWebArea", parent_ref: null },
+    { role: "heading", parent_ref: 1 },
+  ]);
+  assert.equal(snapshot.document.loader_id, "loader-a");
 });
 
 test("debugger attach failure never attempts detach and Chrome errors stay fixed", async () => {

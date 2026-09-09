@@ -251,17 +251,34 @@ export function normalizeSnapshot({ tabId, frameTree, axNodes }) {
   if (!Number.isSafeInteger(tabId) || tabId < 0 || !nonEmptyString(loaderId) || loaderId.length > SNAPSHOT_LOADER_ID_MAX_LENGTH || !Array.isArray(axNodes)) fail();
   const candidates = [];
   const byNodeId = new Map();
+  const rawByNodeId = new Map();
+  const duplicateNodeIds = new Set();
   let truncated = false;
   for (const raw of axNodes) {
-    if (rootFrameId !== undefined && raw?.frameId !== undefined && raw.frameId !== rootFrameId) {
+    if (!raw || typeof raw !== "object" || typeof raw.nodeId !== "string" || raw.nodeId.length === 0) {
       truncated = true;
       continue;
     }
-    if (!raw || typeof raw !== "object" || raw.ignored === true || typeof raw.nodeId !== "string" || raw.nodeId.length === 0) {
+    if (rawByNodeId.has(raw.nodeId)) {
+      duplicateNodeIds.add(raw.nodeId);
       truncated = true;
       continue;
     }
-    if (byNodeId.has(raw.nodeId)) {
+
+    const record = {
+      raw,
+      nodeId: raw.nodeId,
+      parentId: raw.parentId === undefined ? null : raw.parentId,
+      frameMismatch: raw.frameId !== undefined && (rootFrameId === undefined || raw.frameId !== rootFrameId),
+      ignored: raw.ignored === true,
+      eligible: false,
+    };
+    rawByNodeId.set(record.nodeId, record);
+    if (record.frameMismatch) {
+      truncated = true;
+      continue;
+    }
+    if (record.ignored) {
       truncated = true;
       continue;
     }
@@ -280,7 +297,7 @@ export function normalizeSnapshot({ tabId, frameTree, axNodes }) {
     const candidate = {
       raw,
       nodeId: raw.nodeId,
-      parentId: raw.parentId === undefined ? null : raw.parentId,
+      parentId: record.parentId,
       role: role.value,
       name: name.value,
       value: value.value,
@@ -288,6 +305,8 @@ export function normalizeSnapshot({ tabId, frameTree, axNodes }) {
       textTruncated: role.truncated || name.truncated || value.truncated,
       sourceIndex: candidates.length,
     };
+    record.eligible = true;
+    record.candidate = candidate;
     byNodeId.set(candidate.nodeId, candidate);
     candidates.push(candidate);
     truncated ||= candidate.textTruncated;
@@ -298,8 +317,43 @@ export function normalizeSnapshot({ tabId, frameTree, axNodes }) {
   const depthById = new Map();
   const cycleIds = new Set();
   let partial = false;
+  // Ignored AX nodes are structural only: walk through them, but never through
+  // unknown, excluded, or other-frame records when resolving an output parent.
+  const resolveParent = (candidate) => {
+    const visiting = new Set();
+    let parentId = candidate.parentId;
+    while (parentId !== null) {
+      if (visiting.has(parentId) || duplicateNodeIds.has(parentId)) {
+        return { ok: false };
+      }
+      visiting.add(parentId);
+      const parent = rawByNodeId.get(parentId);
+      if (!parent || parent.frameMismatch || (!parent.ignored && !parent.eligible)) {
+        return { ok: false };
+      }
+      if (parent.eligible) {
+        return { ok: true, parentId };
+      }
+      parentId = parent.parentId;
+    }
+    return { ok: true, parentId: null };
+  };
+  for (const candidate of candidates) {
+    const resolved = resolveParent(candidate);
+    if (!resolved.ok) {
+      candidate.parentResolutionFailed = true;
+      truncated = true;
+      partial = true;
+    } else {
+      candidate.parentId = resolved.parentId;
+    }
+  }
   const computeDepth = (candidate, visiting = new Set()) => {
     if (depthById.has(candidate.nodeId)) return depthById.get(candidate.nodeId);
+    if (candidate.parentResolutionFailed) {
+      depthById.set(candidate.nodeId, Number.POSITIVE_INFINITY);
+      return Number.POSITIVE_INFINITY;
+    }
     if (visiting.has(candidate.nodeId)) {
       for (const id of visiting) cycleIds.add(id);
       partial = true;
