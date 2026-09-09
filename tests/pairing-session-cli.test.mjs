@@ -19,11 +19,50 @@ async function* commands(lines) {
 }
 
 test("pairing CLI accepts only an explicit start instance command", () => {
-  assert.deepEqual(parsePairingCommand(["start", "poc-a"]), { instanceId: "poc-a" });
+  assert.deepEqual(parsePairingCommand(["start", "poc-a"]), { instanceId: "poc-a", leaseMinutes: 60 });
+  assert.deepEqual(parsePairingCommand(["start", "poc-a", "--lease-minutes", "90"]), {
+    instanceId: "poc-a",
+    leaseMinutes: 90,
+  });
   assert.equal(parsePairingCommand([]), null);
   assert.equal(parsePairingCommand(["start"]), null);
   assert.equal(parsePairingCommand(["plan", "poc-a"]), null);
   assert.equal(parsePairingCommand(["start", "poc-a", "extra"]), null);
+  for (const argumentsList of [
+    ["start", "poc-a", "--lease-minutes"],
+    ["start", "poc-a", "--lease-minutes", ""],
+    ["start", "poc-a", "--lease-minutes", "0"],
+    ["start", "poc-a", "--lease-minutes", "01"],
+    ["start", "poc-a", "--lease-minutes", "1.5"],
+    ["start", "poc-a", "--lease-minutes", "1441"],
+    ["start", "poc-a", "--lease-minutes", "90", "extra"],
+    ["start", "poc-a", "--lease-minutes", "90", "--lease-minutes", "120"],
+  ]) {
+    assert.equal(parsePairingCommand(argumentsList), null);
+  }
+});
+
+test("pairing CLI passes the default and explicit lease durations to the harness", async () => {
+  const starts = [];
+  const startHarness = async (options) => {
+    starts.push(options);
+    return { async close() {} };
+  };
+  const run = (argumentsList) => runPairingSession({
+    argumentsList,
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["quit"]),
+    output: writableCapture(),
+    errorOutput: writableCapture(),
+    startHarness,
+  });
+
+  assert.equal(await run(["start", "poc-a"]), 0);
+  assert.equal(await run(["start", "poc-b", "--lease-minutes", "90"]), 0);
+  assert.deepEqual(starts, [
+    { runtimeRoot: "/private/tmp/runtime", instanceId: "poc-a", ttlMs: 3_600_000 },
+    { runtimeRoot: "/private/tmp/runtime", instanceId: "poc-b", ttlMs: 5_400_000 },
+  ]);
 });
 
 test("pairing CLI parses navigate arguments strictly and canonicalizes accepted URLs", () => {

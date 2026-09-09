@@ -11,12 +11,31 @@ import {
 } from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
+const DEFAULT_PAIRING_LEASE_MINUTES = 60;
+const MAX_PAIRING_LEASE_MINUTES = 1_440;
+const LEASE_MINUTES_PATTERN = /^[1-9]\d*$/;
+
 export function parsePairingCommand(argumentsList) {
   const [command, instanceId, ...extra] = argumentsList;
-  if (command !== "start" || !instanceId || extra.length !== 0) {
+  if (command !== "start" || !instanceId) {
     return null;
   }
-  return { instanceId };
+  if (extra.length === 0) {
+    return { instanceId, leaseMinutes: DEFAULT_PAIRING_LEASE_MINUTES };
+  }
+  if (
+    extra.length !== 2 ||
+    extra[0] !== "--lease-minutes" ||
+    typeof extra[1] !== "string" ||
+    !LEASE_MINUTES_PATTERN.test(extra[1])
+  ) {
+    return null;
+  }
+  const leaseMinutes = Number(extra[1]);
+  if (!Number.isSafeInteger(leaseMinutes) || leaseMinutes < 1 || leaseMinutes > MAX_PAIRING_LEASE_MINUTES) {
+    return null;
+  }
+  return { instanceId, leaseMinutes };
 }
 
 export function parseInteractiveCommand(line) {
@@ -53,13 +72,17 @@ export async function runPairingSession({
 }) {
   const command = parsePairingCommand(argumentsList);
   if (command === null) {
-    errorOutput.write("usage: pairing start <instance-id>\n");
+    errorOutput.write("usage: pairing start <instance-id> [--lease-minutes <1..1440>]\n");
     return 2;
   }
 
   let harness;
   try {
-    harness = await startHarness({ runtimeRoot, instanceId: command.instanceId });
+    harness = await startHarness({
+      runtimeRoot,
+      instanceId: command.instanceId,
+      ttlMs: command.leaseMinutes * 60_000,
+    });
   } catch (error) {
     errorOutput.write(`${error.message}\n`);
     return 1;
