@@ -1,4 +1,18 @@
 import { resetPairingBinding } from "./pairing-reset.mjs";
+import { createPairingWake } from "./pairing-protocol.mjs";
+
+export function notifyPairingWake({ chromeApi = chrome } = {}) {
+  const sendMessage = chromeApi?.runtime?.sendMessage;
+  if (typeof sendMessage !== "function") return;
+  try {
+    const result = sendMessage(createPairingWake());
+    if (result && typeof result.catch === "function") {
+      void result.catch(() => {});
+    }
+  } catch {
+    // A sleeping service worker or an unavailable receiver must not affect the Options page.
+  }
+}
 
 function requiredElement(documentApi, id) {
   const element = documentApi.getElementById(id);
@@ -9,6 +23,7 @@ function requiredElement(documentApi, id) {
 }
 
 export function attachPairingResetPage({ documentApi = document, chromeApi = chrome } = {}) {
+  notifyPairingWake({ chromeApi });
   const button = requiredElement(documentApi, "reset-pairing");
   const status = requiredElement(documentApi, "status");
   let pending = false;

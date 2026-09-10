@@ -1,4 +1,5 @@
 export const PAIRING_PROTOCOL_VERSION = 1;
+export const PAIRING_WAKE_MESSAGE_TYPE = "pairing_wake";
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
 export const NAVIGATE_URL_MAX_LENGTH = 8_192;
 export const SNAPSHOT_NODE_MAX = 100;
@@ -59,6 +60,19 @@ export function validateBinding(binding) {
 export function validateRebindRequired(message) {
   exactFields(message, ["type", "protocol_version"]);
   if (message.type !== "rebind_required" || message.protocol_version !== PAIRING_PROTOCOL_VERSION) fail();
+  return true;
+}
+
+export function createPairingWake() {
+  return {
+    type: PAIRING_WAKE_MESSAGE_TYPE,
+    protocol_version: PAIRING_PROTOCOL_VERSION,
+  };
+}
+
+export function validatePairingWake(message) {
+  exactFields(message, ["type", "protocol_version"]);
+  if (message.type !== PAIRING_WAKE_MESSAGE_TYPE || message.protocol_version !== PAIRING_PROTOCOL_VERSION) fail();
   return true;
 }
 

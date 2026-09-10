@@ -1,5 +1,6 @@
 import {
   createPairAck,
+  validatePairingWake,
   startPairing,
   validateBinding,
   validateRebindRequired,
@@ -48,6 +49,41 @@ function reportErrorToConsole(message, detail) {
 
 function reportWarningToConsole(message, detail) {
   console.warn(message, detail);
+}
+
+export function isPairingWakeSender(sender, extensionId) {
+  if (typeof extensionId !== "string" || extensionId.length === 0 || sender?.id !== extensionId || typeof sender?.url !== "string") {
+    return false;
+  }
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === "chrome-extension:"
+      && url.hostname === extensionId
+      && url.pathname === "/options.html"
+      && url.search === ""
+      && url.hash === "";
+  } catch {
+    return false;
+  }
+}
+
+export function createPairingWakeReceiver({ extensionId, connect }) {
+  if (typeof connect !== "function") throw new TypeError("pairing wake connect callback is required");
+  return (message, sender) => {
+    try {
+      validatePairingWake(message);
+    } catch {
+      return undefined;
+    }
+    if (!isPairingWakeSender(sender, extensionId)) return undefined;
+    try {
+      const result = connect();
+      if (result && typeof result.catch === "function") void result.catch(() => {});
+    } catch {
+      // A wake failure must not disclose state or affect the Options page.
+    }
+    return undefined;
+  };
 }
 
 /** Chrome lifecycle adapter; it reconnects only to the configured Native Host name. */
@@ -311,6 +347,13 @@ export function createPairingController({
       connecting = false;
       if (shouldRetry) scheduleReconnect();
     }
+  }
+
+  if (typeof chromeApi.runtime?.onMessage?.addListener === "function" && typeof chromeApi.runtime.id === "string") {
+    chromeApi.runtime.onMessage.addListener(createPairingWakeReceiver({
+      extensionId: chromeApi.runtime.id,
+      connect,
+    }));
   }
 
   return {

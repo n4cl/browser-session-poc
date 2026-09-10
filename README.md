@@ -44,11 +44,11 @@ npm run native-host -- uninstall poc-gate1
 
 Extensionの`storage` permissionは、`pair_active`で確定したbinding（session/browser/profile/generation/lease）だけを保存し、次回に同じinstanceへ`resume_start`するために使う。challengeやnonceは保存しない。
 
-保存済みbindingが古くなった場合は、自動で消去されない。対象PoC Chromeで`chrome://extensions`を開き、この拡張機能の「詳細」から「拡張機能のオプション」を開く。「保存済みの接続情報を削除して再読み込み」を選ぶと、bindingを削除してから拡張機能を再読み込みし、次回は`pair_start`から開始する。
+保存済みbindingが古くなった場合、同じbrowser/profile instance内のstale session、generation、またはleaseを検出したresumeは自動でbindingを再pairingへ切り替える。対象PoC Chromeで`chrome://extensions`を開き、この拡張機能の「詳細」から「拡張機能のオプション」を開くと、Optionsページが固定の内部wakeを一度送り、service workerの既存接続処理を起動する。直接開く場合は`chrome-extension://<extension-id>/options.html`を使い、query/hashは付けない。Optionsの「保存済みの接続情報を削除して再読み込み」は通常操作ではなく、bindingを削除して`pair_start`からやり直す回復専用操作である。
 
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 
-ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。generationまたはleaseが保存済みbindingと異なる場合は、自動でresetやlease rotationを推測せずfail-closedにする。Options画面からの明示的なbinding resetは実装済みだが、lease rotationとrenewalは未実装である。Gate 1の実機結果は過去の確認記録として保持している。
+ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。同じbrowser/profile instanceのsession、generation、またはleaseが保存済みbindingと異なる場合は自動再pairingし、browser/profile instance自体が異なる場合はfail-closedにする。Options画面からの明示的なbinding resetは回復用に実装済みだが、lease rotationとrenewalは未実装である。Gate 1の実機結果は過去の確認記録として保持している。
 
 `npm run pairing -- start <instance-id>` は前景session harnessを開始する。起動時に既存claimを検出した場合は、記録済みprocess identityと全プロセス列挙で生きたharnessがいないことを確認してからのみ回収する。旧claim形式は、対応descriptorの期限切れ、socket接続不能、該当harnessプロセス不在の全条件が必要である。不明なclaim、descriptor、socket、process状態はfail-closedで保持する。
 
