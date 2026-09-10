@@ -38,6 +38,8 @@ npm run native-host -- uninstall poc-gate1
 
 詳細は[Gate 1実機試験結果](./docs/gate-1-results.md)を参照する。
 
+unpacked Extensionのコードを変更した場合は、managed Chromeを再起動する前にmanifestのversionを更新して古いservice workerの登録を更新する。手動のReloadは開発時のfallbackであり、通常の運用手順ではない。
+
 ## Gate 2 Native Host wrapper
 
 `install`が生成するwrapperは、固定されたruntime rootとinstance-idをHostへ引数で渡す。Hostはそのinstanceのprofile metadataとactive descriptorだけを0600・非symlink・期限の条件で再検証し、descriptorが指定したsession socketだけへ接続する。他instanceの探索やGate 1への自動fallbackはしない。

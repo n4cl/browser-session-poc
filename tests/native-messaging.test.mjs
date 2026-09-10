@@ -151,6 +151,7 @@ function bridgeFor(challenge) {
 test("manifest public key derives the fixed unpacked extension ID", async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "extension", "manifest.json"), "utf8"));
   assert.equal(extensionIdFromPublicKey(manifest.key), GATE_1_EXTENSION_ID);
+  assert.equal(manifest.version, "0.0.2");
   assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage", "tabs", "debugger"]);
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.host_permissions, undefined);
