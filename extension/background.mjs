@@ -1,5 +1,6 @@
 import {
   createPairAck,
+  PAIRING_WAKE_SEARCH,
   validatePairingWake,
   startPairing,
   validateBinding,
@@ -55,12 +56,13 @@ export function isPairingWakeSender(sender, extensionId) {
   if (typeof extensionId !== "string" || extensionId.length === 0 || sender?.id !== extensionId || typeof sender?.url !== "string") {
     return false;
   }
+  if (sender.url !== `chrome-extension://${extensionId}/options.html${PAIRING_WAKE_SEARCH}`) return false;
   try {
     const url = new URL(sender.url);
     return url.protocol === "chrome-extension:"
       && url.hostname === extensionId
       && url.pathname === "/options.html"
-      && url.search === ""
+      && url.search === PAIRING_WAKE_SEARCH
       && url.hash === "";
   } catch {
     return false;

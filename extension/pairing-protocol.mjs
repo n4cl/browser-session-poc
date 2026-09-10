@@ -1,5 +1,6 @@
 export const PAIRING_PROTOCOL_VERSION = 1;
 export const PAIRING_WAKE_MESSAGE_TYPE = "pairing_wake";
+export const PAIRING_WAKE_SEARCH = "?pairing_wake=1";
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
 export const NAVIGATE_URL_MAX_LENGTH = 8_192;
 export const SNAPSHOT_NODE_MAX = 100;

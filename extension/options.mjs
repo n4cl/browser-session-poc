@@ -1,7 +1,16 @@
 import { resetPairingBinding } from "./pairing-reset.mjs";
-import { createPairingWake } from "./pairing-protocol.mjs";
+import { createPairingWake, PAIRING_WAKE_SEARCH } from "./pairing-protocol.mjs";
 
-export function notifyPairingWake({ chromeApi = chrome } = {}) {
+export function isPairingWakeLocation(locationApi) {
+  return (typeof locationApi?.href !== "string" || !locationApi.href.includes("#"))
+    && locationApi?.protocol === "chrome-extension:"
+    && locationApi?.pathname === "/options.html"
+    && locationApi?.search === PAIRING_WAKE_SEARCH
+    && locationApi?.hash === "";
+}
+
+export function notifyPairingWake({ chromeApi = globalThis.chrome, locationApi = globalThis.location } = {}) {
+  if (!isPairingWakeLocation(locationApi)) return;
   const sendMessage = chromeApi?.runtime?.sendMessage;
   if (typeof sendMessage !== "function") return;
   try {
@@ -22,8 +31,8 @@ function requiredElement(documentApi, id) {
   return element;
 }
 
-export function attachPairingResetPage({ documentApi = document, chromeApi = chrome } = {}) {
-  notifyPairingWake({ chromeApi });
+export function attachPairingResetPage({ documentApi = document, chromeApi = chrome, locationApi = globalThis.location } = {}) {
+  notifyPairingWake({ chromeApi, locationApi });
   const button = requiredElement(documentApi, "reset-pairing");
   const status = requiredElement(documentApi, "status");
   let pending = false;

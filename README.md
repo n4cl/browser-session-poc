@@ -44,7 +44,7 @@ npm run native-host -- uninstall poc-gate1
 
 Extensionの`storage` permissionは、`pair_active`で確定したbinding（session/browser/profile/generation/lease）だけを保存し、次回に同じinstanceへ`resume_start`するために使う。challengeやnonceは保存しない。
 
-保存済みbindingが古くなった場合、同じbrowser/profile instance内のstale session、generation、またはleaseを検出したresumeは自動でbindingを再pairingへ切り替える。対象PoC Chromeで`chrome://extensions`を開き、この拡張機能の「詳細」から「拡張機能のオプション」を開くと、Optionsページが固定の内部wakeを一度送り、service workerの既存接続処理を起動する。直接開く場合は`chrome-extension://<extension-id>/options.html`を使い、query/hashは付けない。Optionsの「保存済みの接続情報を削除して再読み込み」は通常操作ではなく、bindingを削除して`pair_start`からやり直す回復専用操作である。
+保存済みbindingが古くなった場合、同じbrowser/profile instance内のstale session、generation、またはleaseを検出したresumeは自動でbindingを再pairingへ切り替える。対象PoC Chromeで`chrome://extensions`を開き、この拡張機能の「詳細」からwake専用URL `chrome-extension://<extension-id>/options.html?pairing_wake=1`を開くと、Optionsページが固定の内部wakeを一度送り、service workerの既存接続処理を起動する。queryの追加・並べ替え、encoding、hashは使わない。通常の`options.html`はwakeを送らない。Optionsの「保存済みの接続情報を削除して再読み込み」は通常操作ではなく、bindingを削除して`pair_start`からやり直す回復専用操作である。
 
 Gate 1の`hello`/`ack`は直接Hostを起動する既存テスト互換のためだけに残している。生成wrapperからの経路は、`pair_start`または保存済みidentity tuple付きの`resume_start`で始めるGate 2 protocol専用である。
 

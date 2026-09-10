@@ -6,7 +6,7 @@ import {
   isPairingWakeSender,
 } from "../extension/background.mjs";
 import { createPairingWake } from "../extension/pairing-protocol.mjs";
-import { attachPairingResetPage } from "../extension/options.mjs";
+import { attachPairingResetPage, isPairingWakeLocation } from "../extension/options.mjs";
 
 function fakePort() {
   const messages = [];
@@ -28,11 +28,16 @@ async function settle() {
 
 test("pairing wake accepts only the exact Options sender and fixed message", () => {
   const extensionId = "test-extension-id";
-  const sender = { id: extensionId, url: `chrome-extension://${extensionId}/options.html` };
+  const sender = { id: extensionId, url: `chrome-extension://${extensionId}/options.html?pairing_wake=1` };
   assert.equal(isPairingWakeSender(sender, extensionId), true);
+  assert.equal(isPairingWakeSender({ ...sender, url: `chrome-extension://${extensionId}/options.html` }, extensionId), false);
   assert.equal(isPairingWakeSender({ ...sender, id: "other-extension-id" }, extensionId), false);
-  assert.equal(isPairingWakeSender({ ...sender, url: `${sender.url}?wake=1` }, extensionId), false);
+  assert.equal(isPairingWakeSender({ ...sender, url: `${sender.url}&wake=1` }, extensionId), false);
+  assert.equal(isPairingWakeSender({ ...sender, url: `chrome-extension://${extensionId}/options.html?wake=1` }, extensionId), false);
+  assert.equal(isPairingWakeSender({ ...sender, url: `chrome-extension://${extensionId}/options.html?x=1&pairing_wake=1` }, extensionId), false);
+  assert.equal(isPairingWakeSender({ ...sender, url: `chrome-extension://${extensionId}/options.html?pairing_wake%3D1` }, extensionId), false);
   assert.equal(isPairingWakeSender({ ...sender, url: `${sender.url}#wake` }, extensionId), false);
+  assert.equal(isPairingWakeSender({ ...sender, url: `${sender.url}#` }, extensionId), false);
   assert.equal(isPairingWakeSender({ ...sender, url: `chrome-extension://${extensionId}/other.html` }, extensionId), false);
 
   let connects = 0;
@@ -71,7 +76,7 @@ test("pairing wake invokes the idempotent controller connection only once", asyn
   };
   createPairingController({ chromeApi, setTimer: () => ({}) });
   assert.equal(listeners.length, 1);
-  const sender = { id: extensionId, url: `chrome-extension://${extensionId}/options.html` };
+  const sender = { id: extensionId, url: `chrome-extension://${extensionId}/options.html?pairing_wake=1` };
   listeners[0](createPairingWake(), sender);
   listeners[0](createPairingWake(), sender);
   await settle();
@@ -98,9 +103,49 @@ test("Options sends one fixed wake and swallows send failures without changing t
         },
       },
     },
+    locationApi: {
+      protocol: "chrome-extension:",
+      pathname: "/options.html",
+      search: "?pairing_wake=1",
+      hash: "",
+    },
   });
   await settle();
   assert.deepEqual(sent, [createPairingWake()]);
   assert.equal(button.disabled, false);
   assert.equal(status.textContent, "");
+});
+
+test("ordinary Options URL does not send a pairing wake", () => {
+  assert.equal(isPairingWakeLocation({
+    protocol: "chrome-extension:",
+    pathname: "/options.html",
+    search: "",
+    hash: "",
+  }), false);
+  assert.equal(isPairingWakeLocation({
+    href: "chrome-extension://test-extension-id/options.html?pairing_wake=1#",
+    protocol: "chrome-extension:",
+    pathname: "/options.html",
+    search: "?pairing_wake=1",
+    hash: "",
+  }), false);
+  const sent = [];
+  attachPairingResetPage({
+    documentApi: {
+      getElementById(id) {
+        return id === "reset-pairing"
+          ? { disabled: false, addEventListener() {} }
+          : { textContent: "" };
+      },
+    },
+    chromeApi: { runtime: { sendMessage(message) { sent.push(message); } } },
+    locationApi: {
+      protocol: "chrome-extension:",
+      pathname: "/options.html",
+      search: "",
+      hash: "",
+    },
+  });
+  assert.deepEqual(sent, []);
 });
