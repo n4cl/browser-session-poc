@@ -27,6 +27,11 @@ test("DevToolsActivePort accepts only a loopback browser endpoint path", () => {
 
 test("DevToolsActivePort is tied to the current user and maintenance startup", async () => {
   const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const profileInfo = {
+    isDirectory: () => true,
+    mode: 0o40700,
+    uid: currentUid,
+  };
   const fileInfo = {
     isFile: () => true,
     mode: 0o100600,
@@ -37,6 +42,7 @@ test("DevToolsActivePort is tied to the current user and maintenance startup", a
   const readOptions = {
     userDataDir: "/tmp/browser-poc/profiles/poc-a",
     minimumMtimeMs: 1_000,
+    lstatUserDataDirImpl: async () => profileInfo,
     lstatImpl: async () => fileInfo,
     readFileImpl: async () => "9\n/devtools/browser/browser-a\n",
   };
@@ -52,11 +58,30 @@ test("DevToolsActivePort is tied to the current user and maintenance startup", a
     ...readOptions,
     lstatImpl: async () => ({ ...fileInfo, nlink: 2 }),
   }), /endpoint is unavailable/);
+  assert.deepEqual(await readDevToolsActivePort({
+    ...readOptions,
+    lstatImpl: async () => ({ ...fileInfo, mode: 0o100644 }),
+  }), {
+    port: 9,
+    webSocketPath: "/devtools/browser/browser-a",
+  });
+  await assert.rejects(() => readDevToolsActivePort({
+    ...readOptions,
+    lstatUserDataDirImpl: async () => ({ ...profileInfo, mode: 0o40755 }),
+  }), /user data directory is unavailable/);
+  await assert.rejects(() => readDevToolsActivePort({
+    ...readOptions,
+    lstatUserDataDirImpl: async () => ({ ...profileInfo, isDirectory: () => false }),
+  }), /user data directory is unavailable/);
   if (currentUid !== undefined) {
     await assert.rejects(() => readDevToolsActivePort({
       ...readOptions,
       lstatImpl: async () => ({ ...fileInfo, uid: currentUid + 1 }),
     }), /endpoint is unavailable/);
+    await assert.rejects(() => readDevToolsActivePort({
+      ...readOptions,
+      lstatUserDataDirImpl: async () => ({ ...profileInfo, uid: currentUid + 1 }),
+    }), /user data directory is unavailable/);
   }
 });
 

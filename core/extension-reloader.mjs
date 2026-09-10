@@ -49,9 +49,24 @@ export async function readDevToolsActivePort({
   minimumMtimeMs = null,
   readFileImpl = readFile,
   lstatImpl = lstat,
+  lstatUserDataDirImpl = lstat,
 }) {
   if (typeof userDataDir !== "string" || !path.isAbsolute(userDataDir)) {
     fail("invalid managed Chrome user data directory");
+  }
+  let profileInfo;
+  try {
+    profileInfo = await lstatUserDataDirImpl(userDataDir);
+  } catch {
+    fail("managed Chrome user data directory is unavailable");
+  }
+  const profileOwnerMatches = typeof process.getuid !== "function" || profileInfo.uid === process.getuid();
+  if (
+    !profileInfo.isDirectory() ||
+    !profileOwnerMatches ||
+    (profileInfo.mode & 0o777) !== 0o700
+  ) {
+    fail("managed Chrome user data directory is unavailable");
   }
   const filePath = path.join(userDataDir, DEVTOOLS_ACTIVE_PORT_FILENAME);
   let info;
@@ -63,7 +78,14 @@ export async function readDevToolsActivePort({
   const ownerMatches = typeof process.getuid !== "function" || info.uid === process.getuid();
   const mtimeMatches =
     minimumMtimeMs === null || (Number.isFinite(info.mtimeMs) && info.mtimeMs >= minimumMtimeMs);
-  if (!info.isFile() || info.nlink !== 1 || !ownerMatches || !mtimeMatches || (info.mode & 0o777) !== 0o600) {
+  const fileMode = info.mode & 0o777;
+  if (
+    !info.isFile() ||
+    info.nlink !== 1 ||
+    !ownerMatches ||
+    !mtimeMatches ||
+    (fileMode !== 0o600 && fileMode !== 0o644)
+  ) {
     fail("managed Chrome DevTools endpoint is unavailable");
   }
   let content;
