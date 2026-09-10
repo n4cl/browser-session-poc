@@ -151,7 +151,7 @@ function bridgeFor(challenge) {
 test("manifest public key derives the fixed unpacked extension ID", async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "extension", "manifest.json"), "utf8"));
   assert.equal(extensionIdFromPublicKey(manifest.key), GATE_1_EXTENSION_ID);
-  assert.equal(manifest.version, "0.0.2");
+  assert.equal(manifest.version, "0.0.3");
   assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage", "tabs", "debugger"]);
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.host_permissions, undefined);
@@ -747,6 +747,48 @@ test("pairing Native Host forwards a valid snapshot response without exiting", a
     nodes: [],
     truncated: false,
     partial: false,
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(stderr.read(), null);
+
+  const click = server.requestClick({
+    requestId: "native-click",
+    tabId: 7,
+    loaderId: "loader-native",
+    backendDomNodeId: 42,
+    timeoutMs: 1_000,
+  });
+  assert.deepEqual(await outputQueue.next(), {
+    type: "click_request",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-click",
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+  });
+  input.write(encodeNativeMessage({
+    type: "click_response",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-click",
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+    accepted: true,
+  }));
+  assert.deepEqual(await click, {
+    request_id: "native-click",
+    command: "click",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.metadata.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+    accepted: true,
   });
   await Promise.resolve();
   assert.equal(settled, false);

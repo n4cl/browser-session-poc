@@ -13,10 +13,12 @@ import {
   respondToTabsList,
   respondToNavigate,
   respondToSnapshot,
+  respondToClick,
   validateNavigateRequest,
   validateSnapshotRequest,
+  validateClickRequest,
 } from "./pairing-protocol.mjs";
-import { createDebuggerSnapshotRunner, SNAPSHOT_ERROR_CODES } from "./debugger-snapshot.mjs";
+import { createDebuggerSnapshotRunner, SNAPSHOT_ERROR_CODES, CLICK_ERROR_CODES } from "./debugger-snapshot.mjs";
 import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
 const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
@@ -34,6 +36,7 @@ export const PAIRING_FAILURE_STAGES = Object.freeze([
   "active_tabs_list",
   "active_navigate",
   "active_snapshot",
+  "active_click",
   "unexpected_message",
 ]);
 export const PAIRING_FAILURE_REASONS = Object.freeze([
@@ -297,6 +300,30 @@ export function createPairingController({
                 : "snapshot_failed";
             failureReason = "validation";
             const response = respondToBrowserError(message, binding, activeConnectionId, "snapshot", errorCode);
+            failureReason = "transport";
+            target.postMessage(response);
+          }
+        } else if (message?.type === "click_request") {
+          failureStage = "active_click";
+          failureReason = "validation";
+          const clickTarget = validateClickRequest(message, binding, activeConnectionId);
+          try {
+            failureReason = "chrome_api";
+            const click = await snapshotRunner.click(
+              clickTarget.tabId,
+              clickTarget.loaderId,
+              clickTarget.backendDomNodeId,
+            );
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            failureReason = "validation";
+            const response = respondToClick(message, binding, activeConnectionId, click);
+            failureReason = "transport";
+            target.postMessage(response);
+          } catch (error) {
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            const errorCode = CLICK_ERROR_CODES.includes(error?.code) ? error.code : "click_failed";
+            failureReason = "validation";
+            const response = respondToBrowserError(message, binding, activeConnectionId, "click", errorCode);
             failureReason = "transport";
             target.postMessage(response);
           }

@@ -1,6 +1,6 @@
 import { PAIRING_IDENTITY_FIELDS, PAIRING_PROTOCOL_VERSION } from "./pairing-protocol.mjs";
 
-export const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot"]);
+export const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot", "click"]);
 export const BROWSER_COMMAND_TIMEOUT_MAX_MS = 30_000;
 export const BROWSER_COMMAND_REQUEST_ID_MAX_LENGTH = 128;
 export const BROWSER_COMMAND_RESPONSE_MAX_BYTES = 64 * 1024;
@@ -11,6 +11,7 @@ export const SNAPSHOT_NODE_MAX = 100;
 export const SNAPSHOT_DEPTH_MAX = 16;
 export const SNAPSHOT_TEXT_MAX_LENGTH = 512;
 export const SNAPSHOT_LOADER_ID_MAX_LENGTH = 256;
+export const CLICK_LOADER_ID_MAX_LENGTH = SNAPSHOT_LOADER_ID_MAX_LENGTH;
 export const BROWSER_ERROR_CODES = Object.freeze([
   "debugger_unavailable",
   "tab_not_found",
@@ -18,6 +19,10 @@ export const BROWSER_ERROR_CODES = Object.freeze([
   "debugger_attach_failed",
   "snapshot_failed",
   "debugger_detach_failed",
+  "stale_document",
+  "node_not_found",
+  "not_interactable",
+  "click_failed",
   "response_too_large",
   "tabs_unavailable",
   "navigation_failed",
@@ -96,6 +101,17 @@ function assertSnapshotTarget(target) {
   return { tabId: target.tabId };
 }
 
+export function validateClickTarget({ tabId, loaderId, backendDomNodeId }) {
+  if (!Number.isSafeInteger(tabId) || tabId < 0) fail("click tab id is invalid");
+  if (typeof loaderId !== "string" || loaderId.length === 0 || loaderId.length > CLICK_LOADER_ID_MAX_LENGTH || /\s/u.test(loaderId)) {
+    fail("click loader id is invalid");
+  }
+  if (!Number.isSafeInteger(backendDomNodeId) || backendDomNodeId <= 0) {
+    fail("click backend DOM node id is invalid");
+  }
+  return { tabId, loaderId, backendDomNodeId };
+}
+
 function assertSnapshotNode(node) {
   exactFields(node, ["backend_dom_node_id", "name", "parent_ref", "ref", "role", "state", "value"]);
   if (!Number.isSafeInteger(node.ref) || node.ref <= 0 ||
@@ -160,7 +176,13 @@ export function browserResponseType(command) {
 }
 
 function requestFields(command) {
-  return command === "navigate" ? ["tab_id", "url"] : command === "snapshot" ? ["tab_id"] : [];
+  return command === "navigate"
+    ? ["tab_id", "url"]
+    : command === "snapshot"
+      ? ["tab_id"]
+      : command === "click"
+        ? ["tab_id", "loader_id", "backend_dom_node_id"]
+        : [];
 }
 
 export function createBrowserCommandRequest({ command, requestId, binding, connectionId, target = undefined }) {
@@ -172,6 +194,11 @@ export function createBrowserCommandRequest({ command, requestId, binding, conne
     request.url = navigation.url;
   } else if (command === "snapshot") {
     request.tab_id = assertSnapshotTarget(target ?? {}).tabId;
+  } else if (command === "click") {
+    const click = validateClickTarget(target ?? {});
+    request.tab_id = click.tabId;
+    request.loader_id = click.loaderId;
+    request.backend_dom_node_id = click.backendDomNodeId;
   }
   return request;
 }
@@ -186,6 +213,17 @@ export function validateBrowserCommandRequest(message, { binding, connectionId }
     return { command, requestId: message.request_id, target: validateNavigateTarget({ tabId: message.tab_id, url: message.url }) };
   }
   if (command === "snapshot") return { command, requestId: message.request_id, target: assertSnapshotTarget({ tabId: message.tab_id }) };
+  if (command === "click") {
+    return {
+      command,
+      requestId: message.request_id,
+      target: validateClickTarget({
+        tabId: message.tab_id,
+        loaderId: message.loader_id,
+        backendDomNodeId: message.backend_dom_node_id,
+      }),
+    };
+  }
   return { command, requestId: message.request_id };
 }
 
@@ -196,14 +234,34 @@ export function validateBrowserCommandResponse(message, { command, requestId, bi
   const common = ["type", "request_id", ...PAIRING_IDENTITY_FIELDS, "host_connection_id", "protocol_version"];
   assertBrowserCommandResponseSize(message);
   if (message?.type === "browser_error_response") {
-    exactFields(message, [...common, "command", "error_code"]);
+    const errorFields = command === "click" ? ["tab_id", "loader_id", "backend_dom_node_id"] : [];
+    exactFields(message, [...common, "command", "error_code", ...errorFields]);
     assertIdentity(message, binding, connectionId);
     if (message.request_id !== requestId || message.command !== command || !BROWSER_ERROR_CODES.includes(message.error_code)) {
       fail("browser command error does not match its request");
     }
+    if (command === "click") {
+      const expected = validateClickTarget(target ?? {});
+      const actual = validateClickTarget({
+        tabId: message.tab_id,
+        loaderId: message.loader_id,
+        backendDomNodeId: message.backend_dom_node_id,
+      });
+      if (actual.tabId !== expected.tabId || actual.loaderId !== expected.loaderId || actual.backendDomNodeId !== expected.backendDomNodeId) {
+        fail("click error does not match its target");
+      }
+    }
     return { ok: false, errorCode: message.error_code };
   }
-  const responseFields = command === "browser_status" ? ["status"] : command === "tabs_list" ? ["tabs"] : command === "navigate" ? ["tab_id"] : ["document", "nodes", "partial", "tab_id", "truncated"];
+  const responseFields = command === "browser_status"
+    ? ["status"]
+    : command === "tabs_list"
+      ? ["tabs"]
+      : command === "navigate"
+        ? ["tab_id"]
+        : command === "snapshot"
+          ? ["document", "nodes", "partial", "tab_id", "truncated"]
+          : ["accepted", "backend_dom_node_id", "loader_id", "tab_id"];
   exactFields(message, [...common, ...responseFields]);
   assertIdentity(message, binding, connectionId);
   if (message.type !== browserResponseType(command) || message.request_id !== requestId) {
@@ -231,6 +289,24 @@ export function validateBrowserCommandResponse(message, { command, requestId, bi
       truncated: message.truncated,
     }, tabId);
     return { ok: true, tab_id: tabId, document: message.document, nodes: message.nodes, truncated: message.truncated, partial: message.partial };
+  }
+  if (command === "click") {
+    const expected = validateClickTarget(target ?? {});
+    const actual = validateClickTarget({
+      tabId: message.tab_id,
+      loaderId: message.loader_id,
+      backendDomNodeId: message.backend_dom_node_id,
+    });
+    if (message.accepted !== true || actual.tabId !== expected.tabId || actual.loaderId !== expected.loaderId || actual.backendDomNodeId !== expected.backendDomNodeId) {
+      fail("click response does not match its target");
+    }
+    return {
+      ok: true,
+      tab_id: actual.tabId,
+      loader_id: actual.loaderId,
+      backend_dom_node_id: actual.backendDomNodeId,
+      accepted: true,
+    };
   }
   if (!Number.isSafeInteger(message.tab_id) || message.tab_id < 0) fail("navigate response tab id is invalid");
   if (target !== undefined && message.tab_id !== validateNavigateTarget(target).tabId) {

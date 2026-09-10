@@ -30,6 +30,19 @@ function request(tabId = 7) {
   };
 }
 
+function clickRequest({ tabId = 7, loaderId = "loader-click", backendDomNodeId = 42 } = {}) {
+  return {
+    type: "click_request",
+    request_id: "click-1",
+    protocol_version: 1,
+    ...binding,
+    host_connection_id: "connection-a",
+    tab_id: tabId,
+    loader_id: loaderId,
+    backend_dom_node_id: backendDomNodeId,
+  };
+}
+
 function node(nodeId, parentId = undefined, overrides = {}) {
   return {
     nodeId,
@@ -57,9 +70,9 @@ function apiFixture({ sendCommand = undefined, attach = undefined, detach = unde
         calls.push(["attach", target, version]);
         if (attach) return attach(target, version);
       },
-      async sendCommand(target, method) {
-        calls.push(["sendCommand", target, method]);
-        if (sendCommand) return sendCommand(target, method);
+      async sendCommand(target, method, params) {
+        calls.push(params === undefined ? ["sendCommand", target, method] : ["sendCommand", target, method, params]);
+        if (sendCommand) return sendCommand(target, method, params);
         if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-a" } } };
         if (method === "Accessibility.getFullAXTree") return { nodes: [node("root")] };
         return {};
@@ -278,6 +291,99 @@ test("debugger snapshot follows attach/CDP/disable/detach order", async () => {
     ["sendCommand", { tabId: 7 }, "Accessibility.disable"],
     ["detach", { tabId: 7 }],
   ]);
+});
+
+test("debugger click checks the loader, chooses the largest visible quad, and releases the mouse", async () => {
+  const { api, calls } = apiFixture({
+    sendCommand: async (_target, method, params) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-click" } } };
+      if (method === "DOM.getContentQuads") return {
+        quads: [
+          [0, 0, 1, 0, 1, 1, 0, 1],
+          [10, 20, 30, 20, 30, 40, 10, 40],
+        ],
+      };
+      assert.deepEqual(params, method === "DOM.scrollIntoViewIfNeeded"
+        ? { backendNodeId: 42 }
+        : method === "Input.dispatchMouseEvent" && params.type === "mouseMoved"
+          ? { type: "mouseMoved", x: 20, y: 30 }
+          : method === "Input.dispatchMouseEvent"
+            ? { type: params.type, x: 20, y: 30, button: "left", clickCount: 1 }
+            : params);
+      return {};
+    },
+  });
+  const result = await createDebuggerSnapshotRunner({ chromeApi: api }).click(7, "loader-click", 42);
+  assert.deepEqual(result, { tabId: 7, loaderId: "loader-click", backendDomNodeId: 42, accepted: true });
+  assert.deepEqual(calls.map(([name, ...args]) => [name, ...args]), [
+    ["tabs.get", 7],
+    ["attach", { tabId: 7 }, "1.3"],
+    ["sendCommand", { tabId: 7 }, "Page.getFrameTree"],
+    ["sendCommand", { tabId: 7 }, "DOM.scrollIntoViewIfNeeded", { backendNodeId: 42 }],
+    ["sendCommand", { tabId: 7 }, "DOM.getContentQuads", { backendNodeId: 42 }],
+    ["sendCommand", { tabId: 7 }, "Input.dispatchMouseEvent", { type: "mouseMoved", x: 20, y: 30 }],
+    ["sendCommand", { tabId: 7 }, "Input.dispatchMouseEvent", { type: "mousePressed", x: 20, y: 30, button: "left", clickCount: 1 }],
+    ["sendCommand", { tabId: 7 }, "Input.dispatchMouseEvent", { type: "mouseReleased", x: 20, y: 30, button: "left", clickCount: 1 }],
+    ["detach", { tabId: 7 }],
+  ]);
+});
+
+test("debugger click rejects stale documents and shares the snapshot tab lock", async () => {
+  let releaseFrameTree;
+  const frameTreeWait = new Promise((resolve) => { releaseFrameTree = resolve; });
+  const { api } = apiFixture({
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") {
+        await frameTreeWait;
+        return { frameTree: { frame: { loaderId: "loader-new" } } };
+      }
+      return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] };
+    },
+  });
+  const runner = createDebuggerSnapshotRunner({ chromeApi: api });
+  const click = runner.click(7, "loader-old", 42);
+  await Promise.resolve();
+  await assert.rejects(() => runner.snapshot(7), (error) => error.code === "debugger_busy");
+  releaseFrameTree();
+  await assert.rejects(click, (error) => error.code === "stale_document");
+});
+
+test("debugger click reports outcome_unknown after mouse press uncertainty and always detaches", async () => {
+  const { api, calls } = apiFixture({
+    sendCommand: async (_target, method, params) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-click" } } };
+      if (method === "DOM.getContentQuads") return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] };
+      if (method === "Input.dispatchMouseEvent" && params.type === "mousePressed") throw new Error("transport detail");
+      return {};
+    },
+  });
+  await assert.rejects(() => createDebuggerSnapshotRunner({ chromeApi: api }).click(7, "loader-click", 42), (error) => error.code === "outcome_unknown");
+  assert.deepEqual(calls.at(-1), ["detach", { tabId: 7 }]);
+});
+
+test("background forwards click through the paired identity and keeps the response target-correlated", async () => {
+  const port = pairingPort();
+  const { api } = apiFixture({
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-click" } } };
+      if (method === "DOM.getContentQuads") return { quads: [[0, 0, 20, 0, 20, 20, 0, 20]] };
+      return {};
+    },
+  });
+  await pairedController(pairingChrome(port, api.debugger), port);
+  port.emit(clickRequest());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(port.messages.at(-1), {
+    type: "click_response",
+    request_id: "click-1",
+    protocol_version: 1,
+    ...binding,
+    host_connection_id: "connection-a",
+    tab_id: 7,
+    loader_id: "loader-click",
+    backend_dom_node_id: 42,
+    accepted: true,
+  });
 });
 
 test("debugger snapshot handles official frameTree and AX nodes response shapes", async () => {

@@ -7,6 +7,7 @@ export const SNAPSHOT_NODE_MAX = 100;
 export const SNAPSHOT_DEPTH_MAX = 16;
 export const SNAPSHOT_TEXT_MAX_LENGTH = 512;
 export const SNAPSHOT_LOADER_ID_MAX_LENGTH = 256;
+export const CLICK_LOADER_ID_MAX_LENGTH = SNAPSHOT_LOADER_ID_MAX_LENGTH;
 export const BROWSER_ERROR_CODES = Object.freeze([
   "debugger_unavailable",
   "tab_not_found",
@@ -14,6 +15,10 @@ export const BROWSER_ERROR_CODES = Object.freeze([
   "debugger_attach_failed",
   "snapshot_failed",
   "debugger_detach_failed",
+  "stale_document",
+  "node_not_found",
+  "not_interactable",
+  "click_failed",
   "response_too_large",
   "tabs_unavailable",
   "navigation_failed",
@@ -21,7 +26,7 @@ export const BROWSER_ERROR_CODES = Object.freeze([
   "timeout",
   "transport_closed",
 ]);
-const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot"]);
+const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot", "click"]);
 
 const BINDING_FIELDS = [
   "session_id",
@@ -105,9 +110,22 @@ function validateNavigateTarget({ tabId, url }) {
   return { tabId, url: parsed.href };
 }
 
+function validateClickTarget({ tabId, loaderId, backendDomNodeId }) {
+  if (!Number.isSafeInteger(tabId) || tabId < 0 || typeof loaderId !== "string" || loaderId.length === 0 ||
+    loaderId.length > CLICK_LOADER_ID_MAX_LENGTH || /\s/u.test(loaderId) ||
+    !Number.isSafeInteger(backendDomNodeId) || backendDomNodeId <= 0) fail();
+  return { tabId, loaderId, backendDomNodeId };
+}
+
 function validateBrowserRequest(message, binding, hostConnectionId, command) {
   if (!BROWSER_COMMANDS.includes(command)) fail();
-  const extraFields = command === "navigate" ? ["tab_id", "url"] : command === "snapshot" ? ["tab_id"] : [];
+  const extraFields = command === "navigate"
+    ? ["tab_id", "url"]
+    : command === "snapshot"
+      ? ["tab_id"]
+      : command === "click"
+        ? ["tab_id", "loader_id", "backend_dom_node_id"]
+        : [];
   exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id", ...extraFields]);
   if (message.type !== `${command}_request` || !nonEmptyString(message.request_id) || message.request_id.length > 128) fail();
   validateIdentity(message, binding);
@@ -118,6 +136,11 @@ function validateBrowserRequest(message, binding, hostConnectionId, command) {
     if (!Number.isSafeInteger(message.tab_id) || message.tab_id < 0) fail();
     return { tabId: message.tab_id };
   }
+  if (command === "click") return validateClickTarget({
+    tabId: message.tab_id,
+    loaderId: message.loader_id,
+    backendDomNodeId: message.backend_dom_node_id,
+  });
   return undefined;
 }
 
@@ -242,6 +265,25 @@ export function respondToNavigate(message, binding, hostConnectionId, tabId) {
     request_id: message.request_id,
     ...responseIdentity(binding, hostConnectionId),
     tab_id: tabId,
+  });
+}
+
+export function validateClickRequest(message, binding, hostConnectionId) {
+  return validateBrowserRequest(message, binding, hostConnectionId, "click");
+}
+
+export function respondToClick(message, binding, hostConnectionId, target) {
+  const requestTarget = validateClickRequest(message, binding, hostConnectionId);
+  if (!target || target.tabId !== requestTarget.tabId || target.loaderId !== requestTarget.loaderId ||
+    target.backendDomNodeId !== requestTarget.backendDomNodeId) fail();
+  return assertResponseSize({
+    type: "click_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    tab_id: target.tabId,
+    loader_id: target.loaderId,
+    backend_dom_node_id: target.backendDomNodeId,
+    accepted: true,
   });
 }
 
@@ -484,13 +526,19 @@ export function respondToSnapshot(message, binding, hostConnectionId, snapshot) 
 }
 
 export function respondToBrowserError(message, binding, hostConnectionId, command, errorCode) {
-  validateBrowserRequest(message, binding, hostConnectionId, command);
+  const target = validateBrowserRequest(message, binding, hostConnectionId, command);
   if (!BROWSER_ERROR_CODES.includes(errorCode)) fail();
-  return assertResponseSize({
+  const response = {
     type: "browser_error_response",
     request_id: message.request_id,
     ...responseIdentity(binding, hostConnectionId),
     command,
     error_code: errorCode,
-  });
+  };
+  if (command === "click") {
+    response.tab_id = target.tabId;
+    response.loader_id = target.loaderId;
+    response.backend_dom_node_id = target.backendDomNodeId;
+  }
+  return assertResponseSize(response);
 }

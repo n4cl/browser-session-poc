@@ -6,7 +6,9 @@ import { pathToFileURL } from "node:url";
 import path from "node:path";
 import {
   BROWSER_ERROR_CODES,
+  CLICK_LOADER_ID_MAX_LENGTH,
   SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+  validateClickTarget,
   validateNavigateTarget,
 } from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
@@ -47,6 +49,19 @@ export function parseInteractiveCommand(line) {
   if (parts.length === 2 && parts[0] === "snapshot" && /^(0|[1-9]\d*)$/.test(parts[1])) {
     const tabId = Number(parts[1]);
     if (Number.isSafeInteger(tabId)) return { type: "snapshot", tabId };
+    return null;
+  }
+  if (parts.length === 4 && parts[0] === "click" && /^(0|[1-9]\d*)$/.test(parts[1]) &&
+    /^\S+$/u.test(parts[2]) && parts[2].length <= CLICK_LOADER_ID_MAX_LENGTH && /^[1-9]\d*$/.test(parts[3])) {
+    const tabId = Number(parts[1]);
+    const backendDomNodeId = Number(parts[3]);
+    if (Number.isSafeInteger(tabId) && Number.isSafeInteger(backendDomNodeId)) {
+      try {
+        return { type: "click", ...validateClickTarget({ tabId, loaderId: parts[2], backendDomNodeId }) };
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
   if (parts.length === 3 && parts[0] === "navigate" && /^(0|[1-9]\d*)$/.test(parts[1])) {
@@ -156,6 +171,27 @@ export async function runPairingSession({
           const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
           output.write(`snapshot failed${errorCode}\n`);
         }
+      } else if (interactive?.type === "click") {
+        try {
+          const result = await harness.server.requestClick({
+            requestId: createRequestId(),
+            tabId: interactive.tabId,
+            loaderId: interactive.loaderId,
+            backendDomNodeId: interactive.backendDomNodeId,
+            timeoutMs: SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+          });
+          output.write(`${JSON.stringify({
+            command: "click",
+            generation: result.generation,
+            tab_id: result.tab_id,
+            loader_id: result.loader_id,
+            backend_dom_node_id: result.backend_dom_node_id,
+            accepted: result.accepted,
+          })}\n`);
+        } catch (error) {
+          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
+          output.write(`click failed${errorCode}\n`);
+        }
       } else if (interactive?.type === "disconnect-active-host") {
         try {
           harness.server.disconnectActiveHost();
@@ -170,6 +206,8 @@ export async function runPairingSession({
           ? "error invalid_navigate"
           : typeof line === "string" && line.startsWith("snapshot")
             ? "error invalid_snapshot"
+            : typeof line === "string" && line.startsWith("click")
+              ? "error invalid_click"
             : "error unknown_command"}\n`);
       }
     }

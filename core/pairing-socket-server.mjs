@@ -13,7 +13,10 @@ import {
   reducePairingMessage,
 } from "./pairing-state-machine.mjs";
 import { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
-import { assertBrowserCommandTimeout, SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS } from "./browser-command-protocol.mjs";
+import {
+  assertBrowserCommandTimeout,
+  SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+} from "./browser-command-protocol.mjs";
 
 export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
@@ -157,6 +160,15 @@ export class PairingSocketServer {
 
   requestSnapshot({ requestId, tabId, timeoutMs = SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS }) {
     return this.requestBrowserCommand({ command: "snapshot", requestId, target: { tabId }, timeoutMs });
+  }
+
+  requestClick({ requestId, tabId, loaderId, backendDomNodeId, timeoutMs = SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS }) {
+    return this.requestBrowserCommand({
+      command: "click",
+      requestId,
+      target: { tabId, loaderId, backendDomNodeId },
+      timeoutMs,
+    });
   }
 
   /**
@@ -389,7 +401,7 @@ export class PairingSocketServer {
     for (const [requestId, pending] of this.#pendingBrowserCommands) {
       this.#pendingBrowserCommands.delete(requestId);
       this.#clearTimer(pending.timer);
-      const errorCode = pending.command === "navigate" ? "outcome_unknown" : "transport_closed";
+      const errorCode = ["navigate", "click"].includes(pending.command) ? "outcome_unknown" : "transport_closed";
       const error = new Error(`browser command failed: ${errorCode}`);
       error.code = errorCode;
       pending.reject(error);

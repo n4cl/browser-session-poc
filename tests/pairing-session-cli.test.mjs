@@ -89,6 +89,28 @@ test("pairing CLI parses snapshot with an explicit safe tab id", () => {
   }
 });
 
+test("pairing CLI parses click with an explicit snapshot target", () => {
+  assert.deepEqual(parseInteractiveCommand("click 7 loader-a 42"), {
+    type: "click",
+    tabId: 7,
+    loaderId: "loader-a",
+    backendDomNodeId: 42,
+  });
+  for (const command of [
+    "click",
+    "click 7 loader-a",
+    "click 07 loader-a 42",
+    "click 7 loader-a 0",
+    "click 7 loader-a 01",
+    "click 7 loader a 42",
+    "click 7 loader-a 42 extra",
+    `click 7 ${"a".repeat(257)} 42`,
+    `click 7 loader-a ${Number.MAX_SAFE_INTEGER + 1}`,
+  ]) {
+    assert.equal(parseInteractiveCommand(command), null);
+  }
+});
+
 test("pairing CLI reports status, rejects unknown commands, and closes once on quit", async () => {
   const output = writableCapture();
   const errorOutput = writableCapture();
@@ -279,6 +301,53 @@ test("pairing CLI displays only fixed snapshot error codes", async () => {
   assert.equal(exitCode, 0);
   assert.equal(output.value(), "ready poc-a ISSUED\nsnapshot failed snapshot_failed\nsnapshot failed\n");
   assert.doesNotMatch(output.value(), /raw CDP detail|raw transport detail|unknown_secret_code/);
+});
+
+test("pairing CLI dispatches click with strict target correlation and fixed errors", async () => {
+  const output = writableCapture();
+  const calls = [];
+  let invocation = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["click 7 loader-a 42", "click 7 loader-b 43", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    createRequestId: () => `request-click-${++invocation}`,
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestClick(options) {
+          calls.push(options);
+          if (options.loaderId === "loader-b") {
+            const error = new Error("raw click detail");
+            error.code = "not_interactable";
+            throw error;
+          }
+          return {
+            generation: 3,
+            tab_id: 7,
+            loader_id: "loader-a",
+            backend_dom_node_id: 42,
+            accepted: true,
+          };
+        },
+      },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    { requestId: "request-click-1", tabId: 7, loaderId: "loader-a", backendDomNodeId: 42, timeoutMs: 5_000 },
+    { requestId: "request-click-2", tabId: 7, loaderId: "loader-b", backendDomNodeId: 43, timeoutMs: 5_000 },
+  ]);
+  assert.equal(output.value(), [
+    "ready poc-a ISSUED",
+    '{"command":"click","generation":3,"tab_id":7,"loader_id":"loader-a","backend_dom_node_id":42,"accepted":true}',
+    "click failed not_interactable",
+    "",
+  ].join("\n"));
+  assert.doesNotMatch(output.value(), /raw click detail/);
 });
 
 test("pairing CLI reports browser command failures without exposing transport details and still cleans up", async () => {

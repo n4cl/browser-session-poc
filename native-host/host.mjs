@@ -232,7 +232,7 @@ function assertExtensionRequest(message, descriptor, hostConnectionId) {
   return validateBrowserCommandRequest(message, { binding: descriptor, connectionId: hostConnectionId });
 }
 
-function assertExtensionResponse(message, descriptor, hostConnectionId) {
+function assertExtensionResponse(message, descriptor, hostConnectionId, target = undefined) {
   if (message?.type === "ping_response") {
     assertPing(message, descriptor, hostConnectionId, "ping_response");
     return { command: "ping", requestId: message.request_id };
@@ -243,15 +243,17 @@ function assertExtensionResponse(message, descriptor, hostConnectionId) {
       ? "tabs_list"
       : message?.type === "navigate_response"
         ? "navigate"
-        : message?.type === "snapshot_response"
+      : message?.type === "snapshot_response"
           ? "snapshot"
-      : message?.type === "browser_error_response" ? message.command : null;
+        : message?.type === "click_response"
+          ? "click"
+          : message?.type === "browser_error_response" ? message.command : null;
   validateBrowserCommandResponse(message, {
     command,
     requestId: message?.request_id,
     binding: descriptor,
     connectionId: hostConnectionId,
-    target: command === "snapshot" ? { tabId: message?.tab_id } : undefined,
+    target,
   });
   return { command, requestId: message?.request_id };
 }
@@ -471,7 +473,7 @@ export async function runPairingNativeHost({
                 const pending = assertExtensionRequest(request, descriptor, hostConnectionId);
                 pumpReason = "transport";
                 nativeWrite(output, request);
-                pendingRequests.set(pending.requestId, pending.command);
+                pendingRequests.set(pending.requestId, pending);
               }
             } catch {
               asynchronousFailure = { stage: pumpStage, reason: pumpReason };
@@ -481,9 +483,13 @@ export async function runPairingNativeHost({
         } else if (phase === "ACTIVE") {
           failureStage = "active_response_to_socket";
           failureReason = "validation";
-          const response = assertExtensionResponse(message, descriptor, hostConnectionId);
-          if (pendingRequests.get(response.requestId) !== response.command) {
+          const pending = pendingRequests.get(message?.request_id);
+          if (!pending) {
             throw new Error("browser response does not match a pending request");
+          }
+          const response = assertExtensionResponse(message, descriptor, hostConnectionId, pending.target);
+          if (pending.command !== response.command) {
+            throw new Error("browser response command does not match its request");
           }
           failureReason = "transport";
           bridge.send(message);

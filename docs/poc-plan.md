@@ -132,7 +132,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 ### Gate 3: 最小browser tool
 
-進捗: **実装中**（2026-09-08）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`も自動テストとA/B近接並行の実Chrome試験でこの作業単位の合格を確認した（[Gate 3 navigate実機試験結果](./gate-3-navigate-results.md)）。`snapshot`は自動テストと、管理reload後の自動rebindを含むA/B near-concurrent実Chrome試験でこの作業単位の合格を確認した（[Gate 3 snapshot実機試験結果](./gate-3-snapshot-results.md)）。`click`と`type`は未実装・未合格のため、Gate 3全体は引き続き未合格とする。
+進捗: **実装中**（2026-09-08）。`browser_status`と`tabs_list`はNode.js自動テストとA/B交互の実Chrome試験で合格を確認した（[Gate 3 status/tabs実機試験結果](./gate-3-status-tabs-results.md)）。`navigate`も自動テストとA/B近接並行の実Chrome試験でこの作業単位の合格を確認した（[Gate 3 navigate実機試験結果](./gate-3-navigate-results.md)）。`snapshot`は自動テストと、管理reload後の自動rebindを含むA/B near-concurrent実Chrome試験でこの作業単位の合格を確認した（[Gate 3 snapshot実機試験結果](./gate-3-snapshot-results.md)）。`click`はCLI、Native Host、Extension debugger runnerまで実装し自動テストを追加したが、実Chrome試験は未実施である。`type`は未実装・未合格のため、Gate 3全体は引き続き未合格とする。
 
 実装順:
 
@@ -146,7 +146,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 
 `browser_status`と`tabs_list`は、pairing済みのsession専用socketからactiveな`host_connection_id`へだけ送る。requestとresponseにはidentity tupleと`request_id`を必須とし、responseのidentity、connection、command、request IDが一致しなければ破棄してtransportをfenceする。`tabs_list`はExtensionの`chrome.tabs.query({})`で、そのExtensionが属するChrome profileのタブだけを取得する。
 
-手動検証では通常、既定の1時間leaseを使う`npm run pairing -- start <instance-id>`の対話入力で`browser-status`、`tabs-list`、`navigate <tab-id> <url>`、`snapshot <tab-id>`を使う。1時間を超える手動試験だけは`npm run pairing -- start <instance-id> --lease-minutes <N>`を明示し、`N`は1〜1,440の整数とする。status/tabs/navigateは各実行で新しいrequest IDと1,000 ms timeout、snapshotはCDP attachとAccessibility取得のため5,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。`navigate`の成功は`chrome.tabs.update`がrequestを受理したことだけを示し、page load完了を保証しない。実機検証記録にはtitle、URLなどの実値を保存しない。同じbrowser/profile instance内で保存済みbindingのstale session/generation/leaseを検出したresumeは自動再pairingするため、OptionsのResetは通常操作ではなく回復専用とする。service workerのoperator wakeには`chrome-extension://<extension-id>/options.html?pairing_wake=1`を完全一致で開き、query/hashを追加しない。
+手動検証では通常、既定の1時間leaseを使う`npm run pairing -- start <instance-id>`の対話入力で`browser-status`、`tabs-list`、`navigate <tab-id> <url>`、`snapshot <tab-id>`、`click <tab-id> <loader-id> <backend-dom-node-id>`を使う。clickは同じdocumentのsnapshotから得たloader/node値を明示し、1時間を超える手動試験だけは`npm run pairing -- start <instance-id> --lease-minutes <N>`を明示する。`N`は1〜1,440の整数とする。status/tabs/navigateは各実行で新しいrequest IDと1,000 ms timeout、snapshot/clickはCDP attachとAccessibility/DOM取得のため5,000 ms timeoutを用い、成功時はleaseやnonceを除いたJSONを出力する。`navigate`の成功は`chrome.tabs.update`がrequestを受理したことだけを示し、page load完了を保証しない。clickのloader不一致は`stale_document`、timeout・transport切断・mouse press以降の不確定な失敗は`outcome_unknown`として扱い、自動retryしない。実機検証記録にはtitle、URLなどの実値を保存しない。同じbrowser/profile instance内で保存済みbindingのstale session/generation/leaseを検出したresumeは自動再pairingするため、OptionsのResetは通常操作ではなく回復専用とする。service workerのoperator wakeには`chrome-extension://<extension-id>/options.html?pairing_wake=1`を完全一致で開き、query/hashを追加しない。
 snapshot失敗時のCLI表示は固定error codeのwhitelistにある値だけを付加し、transportやCDPのraw detailは表示しない。
 
 この作業単位の入力・出力制約:
@@ -174,7 +174,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
   → Accessibility.disable（enable成功時） → chrome.debugger.detach
 ```
 
-同じExtension service-worker controller内の同一tabへの実行は`debugger_busy`で拒否する。attachに失敗した場合はdetachを試みず、CDP、tab、detachの詳細エラーは返さない。取得後であってもdisableまたはdetachに失敗した場合は`debugger_detach_failed`として成功を返さない。固定error codeは`debugger_unavailable`、`tab_not_found`、`debugger_busy`、`debugger_attach_failed`、`snapshot_failed`、`debugger_detach_failed`、`response_too_large`である。
+同じExtension service-worker controller内の同一tabへのsnapshot/click実行は同じlockで直列化し、競合は`debugger_busy`で拒否する。snapshotはattachに失敗した場合はdetachを試みず、clickはloader一致をmutation前に確認する。CDP、tab、detach、Chrome errorの詳細は返さない。取得・操作後であってもdisableまたはdetachに失敗した場合は`debugger_detach_failed`として成功を返さない。clickは`Page.getFrameTree`、`DOM.scrollIntoViewIfNeeded`、可視quadの中心計算、mouseMoved、mousePressed、mouseReleasedの順で実行し、press前の検証失敗は固定確定エラー、press以降の不確定な失敗は`outcome_unknown`とする。固定error codeは`debugger_unavailable`、`tab_not_found`、`debugger_busy`、`debugger_attach_failed`、`stale_document`、`node_not_found`、`not_interactable`、`click_failed`、`debugger_detach_failed`、`outcome_unknown`、`snapshot_failed`、`response_too_large`である。
 
 返却するsnapshotはraw CDPを含まず、`document.loader_id`（root frameのloader ID）、`tab_id`、最大100件の連番`ref`、`parent_ref`、`backend_dom_node_id`、`role`、`name`、`value`、`state`（`disabled`、`expanded`、`focused`、`hidden`のbooleanだけ）で構成する。文字列は512文字、木の深さは16、response全体は64 KiB以内に制限し、欠落・上限による省略は`partial`または`truncated`で示す。parentを除外したnodeや循環参照を出力せず、validatorが受理できる連番refとparentだけを生成する。対象documentは取得時のloader IDに束縛されるため、navigation後はsnapshotのdocument/ref/backend DOM参照をstaleとして再利用せず、再取得する。PoCではroot frameだけを対象とし、OOPIFの別frame sessionをattachして取得しない。
 

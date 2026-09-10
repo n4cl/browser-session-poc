@@ -389,6 +389,112 @@ test("snapshot commands stay separated by A/B identity bindings", () => {
   assert.equal(b.effects[0].message.tab_id, 8);
 });
 
+test("click commands correlate every target field and timeout as outcome unknown", () => {
+  const target = { tabId: 7, loaderId: "loader-click", backendDomNodeId: 42 };
+  const issued = issueBrowserCommand(activeState(), {
+    command: "click",
+    requestId: "click-1",
+    target,
+  });
+  assert.deepEqual(issued.effects[0].message, {
+    type: "click_request",
+    ...identity("connection-a"),
+    request_id: "click-1",
+    tab_id: 7,
+    loader_id: "loader-click",
+    backend_dom_node_id: 42,
+  });
+  const response = reducePairingMessage(issued.state, {
+    type: "click_response",
+    ...identity("connection-a"),
+    request_id: "click-1",
+    tab_id: target.tabId,
+    loader_id: target.loaderId,
+    backend_dom_node_id: target.backendDomNodeId,
+    accepted: true,
+  });
+  assert.deepEqual(response.effects, [{
+    type: "browser_resolved",
+    requestId: "click-1",
+    response: {
+      ok: true,
+      tab_id: target.tabId,
+      loader_id: target.loaderId,
+      backend_dom_node_id: target.backendDomNodeId,
+      accepted: true,
+    },
+  }]);
+
+  const pending = issueBrowserCommand(activeState(), {
+    command: "click",
+    requestId: "click-timeout",
+    target,
+  });
+  const cancelled = cancelBrowserCommand(pending.state, "click-timeout");
+  assert.deepEqual(cancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "click-timeout",
+    response: { ok: false, errorCode: "outcome_unknown" },
+  }]);
+  assert.throws(() => reducePairingMessage(cancelled.state, {
+    type: "click_response",
+    ...identity("connection-a"),
+    request_id: "click-timeout",
+    tab_id: target.tabId,
+    loader_id: target.loaderId,
+    backend_dom_node_id: target.backendDomNodeId,
+    accepted: true,
+  }), PairingProtocolError);
+  assert.throws(() => issueBrowserCommand(activeState(), {
+    command: "click",
+    requestId: "click-invalid",
+    target: { ...target, loaderId: "loader with space" },
+  }), PairingProtocolError);
+  assert.throws(() => reducePairingMessage(issued.state, {
+    type: "click_response",
+    ...identity("connection-a"),
+    request_id: "click-1",
+    tab_id: target.tabId,
+    loader_id: target.loaderId,
+    backend_dom_node_id: 43,
+    accepted: true,
+  }), PairingProtocolError);
+});
+
+test("click commands stay separated by A/B identity bindings", () => {
+  const descriptorB = { ...descriptor, session_id: "session-b", browser_instance_id: "browser-b", profile_instance_id: "profile-b" };
+  const stateB = reducePairingMessage(
+    reducePairingMessage(createPairingState(descriptorB), {
+      ...register(),
+      session_id: descriptorB.session_id,
+      browser_instance_id: descriptorB.browser_instance_id,
+      profile_instance_id: descriptorB.profile_instance_id,
+    }).state,
+    {
+      ...ack(),
+      session_id: descriptorB.session_id,
+      browser_instance_id: descriptorB.browser_instance_id,
+      profile_instance_id: descriptorB.profile_instance_id,
+    },
+  ).state;
+  const a = issueBrowserCommand(activeState(), {
+    command: "click",
+    requestId: "click-a",
+    target: { tabId: 7, loaderId: "loader-a", backendDomNodeId: 41 },
+  });
+  const b = issueBrowserCommand(stateB, {
+    command: "click",
+    requestId: "click-b",
+    target: { tabId: 8, loaderId: "loader-b", backendDomNodeId: 42 },
+  });
+  assert.equal(a.effects[0].connectionId, "connection-a");
+  assert.equal(b.effects[0].connectionId, "connection-a");
+  assert.equal(a.effects[0].message.browser_instance_id, descriptor.browser_instance_id);
+  assert.equal(b.effects[0].message.browser_instance_id, descriptorB.browser_instance_id);
+  assert.equal(a.effects[0].message.loader_id, "loader-a");
+  assert.equal(b.effects[0].message.loader_id, "loader-b");
+});
+
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {
   const boundary = new Date(descriptor.expires_at);
   const issued = expirePairingState(createPairingState(descriptor), boundary);

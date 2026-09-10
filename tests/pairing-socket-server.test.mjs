@@ -445,6 +445,38 @@ test("concurrent A and B navigate requests remain on their descriptor-selected s
   assert.equal(bSnapshotResult.document.loader_id, "loader-8");
   assert.equal(aSnapshotResult.browser_instance_id, a.descriptor.browser_instance_id);
   assert.equal(bSnapshotResult.browser_instance_id, b.descriptor.browser_instance_id);
+
+  const aClick = a.server.requestClick({
+    requestId: "click-a",
+    tabId: 7,
+    loaderId: "loader-7",
+    backendDomNodeId: 41,
+  });
+  const bClick = b.server.requestClick({
+    requestId: "click-b",
+    tabId: 8,
+    loaderId: "loader-8",
+    backendDomNodeId: 42,
+  });
+  assert.deepEqual(await aClient.next(), message(a.descriptor, "click_request", "connection-a", {
+    request_id: "click-a", tab_id: 7, loader_id: "loader-7", backend_dom_node_id: 41,
+  }));
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "click_request", "connection-a", {
+    request_id: "click-b", tab_id: 8, loader_id: "loader-8", backend_dom_node_id: 42,
+  }));
+  aClient.send(encodeNativeMessage(message(a.descriptor, "click_response", "connection-a", {
+    request_id: "click-a", tab_id: 7, loader_id: "loader-7", backend_dom_node_id: 41, accepted: true,
+  })));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "click_response", "connection-a", {
+    request_id: "click-b", tab_id: 8, loader_id: "loader-8", backend_dom_node_id: 42, accepted: true,
+  })));
+  const [aClickResult, bClickResult] = await Promise.all([aClick, bClick]);
+  assert.equal(aClickResult.loader_id, "loader-7");
+  assert.equal(bClickResult.loader_id, "loader-8");
+  assert.equal(aClickResult.backend_dom_node_id, 41);
+  assert.equal(bClickResult.backend_dom_node_id, 42);
+  assert.equal(aClickResult.browser_instance_id, a.descriptor.browser_instance_id);
+  assert.equal(bClickResult.browser_instance_id, b.descriptor.browser_instance_id);
 });
 
 test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {
