@@ -934,6 +934,55 @@ test("pairing Native Host requests a rebind for a stale resume without registeri
   assert.deepEqual(failures, []);
 });
 
+test("pairing Native Host rejects stale resumes from another browser or profile instance", async () => {
+  for (const field of ["browser_instance_id", "profile_instance_id"]) {
+    const fixture = await pairingFixture();
+    const bridge = bridgeFor({
+      socket_path: fixture.descriptor.socket_path,
+      message: { type: "unused" },
+    });
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const stderr = new PassThrough();
+    const failures = [];
+    const run = runPairingNativeHost({
+      input,
+      output,
+      stderr,
+      origin: GATE_1_EXTENSION_ORIGIN,
+      runtimeRoot: fixture.runtimeRoot,
+      instanceId: "poc-a",
+      createUuid: () => "connection-foreign-instance",
+      socketConnector: bridge.connector,
+      recordFailure: async (marker) => failures.push(marker),
+      now: PAIRING_NOW,
+    });
+    input.end(encodeNativeMessage({
+      type: "resume_start",
+      protocol_version: 1,
+      session_id: fixture.descriptor.session_id,
+      browser_instance_id: field === "browser_instance_id"
+        ? "foreign-browser-instance"
+        : fixture.descriptor.browser_instance_id,
+      profile_instance_id: field === "profile_instance_id"
+        ? "foreign-profile-instance"
+        : fixture.descriptor.profile_instance_id,
+      generation: fixture.descriptor.generation,
+      lease_id: fixture.descriptor.lease_id,
+    }));
+
+    assert.equal(await run, false);
+    assert.equal(output.read(), null);
+    assert.deepEqual(bridge.sent, []);
+    assert.equal(bridge.closed, true);
+    assert.deepEqual(failures.map(({ stage, reason }) => ({ stage, reason })), [{
+      stage: "handshake_send_register",
+      reason: "validation",
+    }]);
+    assert.equal(stderr.read().toString("utf8"), "[browser-session-poc native-host] rejected pairing protocol\n");
+  }
+});
+
 test("pairing Native Host rejects socket failures, expired descriptors, and mismatched acknowledgements", async () => {
   const fixture = await pairingFixture();
   const connectionId = "connection-a";

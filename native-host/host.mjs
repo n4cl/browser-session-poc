@@ -53,6 +53,10 @@ export const NATIVE_HOST_FAILURE_REASONS = Object.freeze([
   "transport",
   "unexpected",
 ]);
+const RESUME_STABLE_IDENTITY_FIELDS = Object.freeze([
+  "browser_instance_id",
+  "profile_instance_id",
+]);
 
 function runtimeRoot() {
   return process.env.BROWSER_POC_RUNTIME_ROOT
@@ -176,6 +180,11 @@ function assertResumeStartShape(message) {
 
 function assertResumeStart(message, descriptor) {
   assertResumeStartShape(message);
+  for (const field of RESUME_STABLE_IDENTITY_FIELDS) {
+    if (message[field] !== descriptor[field]) {
+      throw new Error("resume stable identity does not match");
+    }
+  }
   return PAIRING_IDENTITY_FIELDS.some((field) => message[field] !== descriptor[field]);
 }
 
