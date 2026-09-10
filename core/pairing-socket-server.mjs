@@ -171,6 +171,15 @@ export class PairingSocketServer {
     });
   }
 
+  requestType({ requestId, tabId, loaderId, backendDomNodeId, text, timeoutMs = SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS }) {
+    return this.requestBrowserCommand({
+      command: "type",
+      requestId,
+      target: { tabId, loaderId, backendDomNodeId, text },
+      timeoutMs,
+    });
+  }
+
   /**
    * PoC-only fault injection for an ACTIVE Native Host transport. The listener,
    * descriptor, and every other instance remain available for that Host's resume.
@@ -401,7 +410,7 @@ export class PairingSocketServer {
     for (const [requestId, pending] of this.#pendingBrowserCommands) {
       this.#pendingBrowserCommands.delete(requestId);
       this.#clearTimer(pending.timer);
-      const errorCode = ["navigate", "click"].includes(pending.command) ? "outcome_unknown" : "transport_closed";
+      const errorCode = ["navigate", "click", "type"].includes(pending.command) ? "outcome_unknown" : "transport_closed";
       const error = new Error(`browser command failed: ${errorCode}`);
       error.code = errorCode;
       pending.reject(error);

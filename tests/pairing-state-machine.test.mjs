@@ -495,6 +495,99 @@ test("click commands stay separated by A/B identity bindings", () => {
   assert.equal(b.effects[0].message.loader_id, "loader-b");
 });
 
+test("type commands correlate targets while keeping text request-only", () => {
+  const target = { tabId: 7, loaderId: "loader-type", backendDomNodeId: 42, text: "hello world" };
+  const issued = issueBrowserCommand(activeState(), {
+    command: "type",
+    requestId: "type-1",
+    target,
+  });
+  assert.deepEqual(issued.effects[0].message, {
+    type: "type_request",
+    ...identity("connection-a"),
+    request_id: "type-1",
+    tab_id: 7,
+    loader_id: "loader-type",
+    backend_dom_node_id: 42,
+    text: "hello world",
+  });
+  const response = reducePairingMessage(issued.state, {
+    type: "type_response",
+    ...identity("connection-a"),
+    request_id: "type-1",
+    tab_id: 7,
+    loader_id: "loader-type",
+    backend_dom_node_id: 42,
+    accepted: true,
+  });
+  assert.deepEqual(response.effects, [{
+    type: "browser_resolved",
+    requestId: "type-1",
+    response: { ok: true, tab_id: 7, loader_id: "loader-type", backend_dom_node_id: 42, accepted: true },
+  }]);
+  assert.equal(JSON.stringify(response.effects).includes("hello world"), false);
+
+  const pending = issueBrowserCommand(activeState(), {
+    command: "type",
+    requestId: "type-timeout",
+    target,
+  });
+  const cancelled = cancelBrowserCommand(pending.state, "type-timeout");
+  assert.deepEqual(cancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "type-timeout",
+    response: { ok: false, errorCode: "outcome_unknown" },
+  }]);
+  assert.throws(() => reducePairingMessage(cancelled.state, {
+    type: "type_response",
+    ...identity("connection-a"),
+    request_id: "type-timeout",
+    tab_id: 7,
+    loader_id: "loader-type",
+    backend_dom_node_id: 42,
+    accepted: true,
+  }), PairingProtocolError);
+  assert.throws(() => issueBrowserCommand(activeState(), {
+    command: "type",
+    requestId: "type-invalid",
+    target: { ...target, text: "" },
+  }), PairingProtocolError);
+});
+
+test("type commands stay separated by A/B identity bindings", () => {
+  const descriptorB = { ...descriptor, session_id: "session-b", browser_instance_id: "browser-b", profile_instance_id: "profile-b" };
+  const stateB = reducePairingMessage(
+    reducePairingMessage(createPairingState(descriptorB), {
+      ...register(),
+      session_id: descriptorB.session_id,
+      browser_instance_id: descriptorB.browser_instance_id,
+      profile_instance_id: descriptorB.profile_instance_id,
+    }).state,
+    {
+      ...ack(),
+      session_id: descriptorB.session_id,
+      browser_instance_id: descriptorB.browser_instance_id,
+      profile_instance_id: descriptorB.profile_instance_id,
+    },
+  ).state;
+  const a = issueBrowserCommand(activeState(), {
+    command: "type",
+    requestId: "type-a",
+    target: { tabId: 7, loaderId: "loader-a", backendDomNodeId: 41, text: "A secret" },
+  });
+  const b = issueBrowserCommand(stateB, {
+    command: "type",
+    requestId: "type-b",
+    target: { tabId: 8, loaderId: "loader-b", backendDomNodeId: 42, text: "B secret" },
+  });
+  assert.equal(a.effects[0].message.browser_instance_id, descriptor.browser_instance_id);
+  assert.equal(b.effects[0].message.browser_instance_id, descriptorB.browser_instance_id);
+  assert.equal(a.effects[0].message.tab_id, 7);
+  assert.equal(b.effects[0].message.tab_id, 8);
+  assert.equal(a.effects[0].message.text, "A secret");
+  assert.equal(b.effects[0].message.text, "B secret");
+});
+
 test("expiration revokes ISSUED, PAIRING, and ACTIVE at the inclusive descriptor boundary", () => {
   const boundary = new Date(descriptor.expires_at);
   const issued = expirePairingState(createPairingState(descriptor), boundary);

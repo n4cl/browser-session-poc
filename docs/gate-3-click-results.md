@@ -36,4 +36,4 @@
 
 **click作業単位の実機試験は合格。** A/Bのnear-concurrent click、click後状態、loader相関、stale document拒否、接続継続を確認した。
 
-ただし、Gate 3全体は`type`が未実装・未合格のため、Gate 3自体は引き続き未合格とする。
+ただし、Gate 3全体は`type`の実機試験が未実施・未合格のため、Gate 3自体は引き続き未合格とする。

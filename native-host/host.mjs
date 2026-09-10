@@ -247,6 +247,8 @@ function assertExtensionResponse(message, descriptor, hostConnectionId, target =
           ? "snapshot"
         : message?.type === "click_response"
           ? "click"
+          : message?.type === "type_response"
+            ? "type"
           : message?.type === "browser_error_response" ? message.command : null;
   validateBrowserCommandResponse(message, {
     command,

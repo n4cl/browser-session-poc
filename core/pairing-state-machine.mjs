@@ -264,6 +264,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
     case "navigate_response":
     case "snapshot_response":
     case "click_response":
+    case "type_response":
     case "browser_error_response": {
       if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
         fail("browser command is not permitted in the current state");
@@ -360,7 +361,7 @@ export function cancelBrowserCommand(state, requestId) {
   }, [{
     type: "browser_rejected",
     requestId,
-    response: { ok: false, errorCode: ["navigate", "click"].includes(pending.command) ? "outcome_unknown" : "timeout" },
+    response: { ok: false, errorCode: ["navigate", "click", "type"].includes(pending.command) ? "outcome_unknown" : "timeout" },
   }]);
 }
 

@@ -151,7 +151,7 @@ function bridgeFor(challenge) {
 test("manifest public key derives the fixed unpacked extension ID", async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "extension", "manifest.json"), "utf8"));
   assert.equal(extensionIdFromPublicKey(manifest.key), GATE_1_EXTENSION_ID);
-  assert.equal(manifest.version, "0.0.3");
+  assert.equal(manifest.version, "0.0.4");
   assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage", "tabs", "debugger"]);
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.host_permissions, undefined);
@@ -790,6 +790,51 @@ test("pairing Native Host forwards a valid snapshot response without exiting", a
     backend_dom_node_id: 42,
     accepted: true,
   });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(stderr.read(), null);
+  const typing = server.requestType({
+    requestId: "native-type",
+    tabId: 7,
+    loaderId: "loader-native",
+    backendDomNodeId: 42,
+    text: "native secret",
+    timeoutMs: 1_000,
+  });
+  assert.deepEqual(await outputQueue.next(), {
+    type: "type_request",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-type",
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+    text: "native secret",
+  });
+  input.write(encodeNativeMessage({
+    type: "type_response",
+    ...pairingIdentity(fixture.descriptor, "connection-snapshot"),
+    request_id: "native-type",
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+    accepted: true,
+  }));
+  const typed = await typing;
+  assert.deepEqual(typed, {
+    request_id: "native-type",
+    command: "type",
+    session_id: fixture.descriptor.session_id,
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.metadata.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+    ok: true,
+    tab_id: 7,
+    loader_id: "loader-native",
+    backend_dom_node_id: 42,
+    accepted: true,
+  });
+  assert.equal(JSON.stringify(typed).includes("native secret"), false);
   await Promise.resolve();
   assert.equal(settled, false);
   assert.equal(stderr.read(), null);

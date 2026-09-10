@@ -14,11 +14,18 @@ import {
   respondToNavigate,
   respondToSnapshot,
   respondToClick,
+  respondToType,
   validateNavigateRequest,
   validateSnapshotRequest,
   validateClickRequest,
+  validateTypeRequest,
 } from "./pairing-protocol.mjs";
-import { createDebuggerSnapshotRunner, SNAPSHOT_ERROR_CODES, CLICK_ERROR_CODES } from "./debugger-snapshot.mjs";
+import {
+  createDebuggerSnapshotRunner,
+  SNAPSHOT_ERROR_CODES,
+  CLICK_ERROR_CODES,
+  TYPE_ERROR_CODES,
+} from "./debugger-snapshot.mjs";
 import { PAIRING_BINDING_STORAGE_KEY } from "./pairing-reset.mjs";
 
 const NATIVE_HOST_NAME = "com.browser_session_poc.gate1";
@@ -37,6 +44,7 @@ export const PAIRING_FAILURE_STAGES = Object.freeze([
   "active_navigate",
   "active_snapshot",
   "active_click",
+  "active_type",
   "unexpected_message",
 ]);
 export const PAIRING_FAILURE_REASONS = Object.freeze([
@@ -324,6 +332,31 @@ export function createPairingController({
             const errorCode = CLICK_ERROR_CODES.includes(error?.code) ? error.code : "click_failed";
             failureReason = "validation";
             const response = respondToBrowserError(message, binding, activeConnectionId, "click", errorCode);
+            failureReason = "transport";
+            target.postMessage(response);
+          }
+        } else if (message?.type === "type_request") {
+          failureStage = "active_type";
+          failureReason = "validation";
+          const typeTarget = validateTypeRequest(message, binding, activeConnectionId);
+          try {
+            failureReason = "chrome_api";
+            const typed = await snapshotRunner.type(
+              typeTarget.tabId,
+              typeTarget.loaderId,
+              typeTarget.backendDomNodeId,
+              typeTarget.text,
+            );
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            failureReason = "validation";
+            const response = respondToType(message, binding, activeConnectionId, typed);
+            failureReason = "transport";
+            target.postMessage(response);
+          } catch (error) {
+            if (port !== target || phase !== "ACTIVE" || activeConnectionId === null) return;
+            const errorCode = TYPE_ERROR_CODES.includes(error?.code) ? error.code : "type_failed";
+            failureReason = "validation";
+            const response = respondToBrowserError(message, binding, activeConnectionId, "type", errorCode);
             failureReason = "transport";
             target.postMessage(response);
           }

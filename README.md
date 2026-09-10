@@ -60,4 +60,4 @@ ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。
 
 PoC harnessの既定leaseは1時間である。満了時はACTIVE状態でもREVOKEDになり、長期session向けのrenewalは未実装である。
 
-Gate 3のclickは`snapshot <tab-id>`で取得した同じdocumentの`loader_id`と対象nodeの`backend_dom_node_id`を使い、`click <tab-id> <loader-id> <backend-dom-node-id>`で実行する。navigation後などloaderが変わったdocumentは`stale_document`として拒否し、clickのtimeout・transport切断・press後またはmutation後cleanupの不確定な失敗は`outcome_unknown`として自動retryしない。
+Gate 3のclickは`snapshot <tab-id>`で取得した同じdocumentの`loader_id`と対象nodeの`backend_dom_node_id`を使い、`click <tab-id> <loader-id> <backend-dom-node-id>`で実行する。navigation後などloaderが変わったdocumentは`stale_document`として拒否し、clickのtimeout・transport切断・press後またはmutation後cleanupの不確定な失敗は`outcome_unknown`として自動retryしない。`type <tab-id> <loader-id> <backend-dom-node-id> <JSON-string>`は対象の既存値へ文字列を挿入する操作であり、置換・clearではない。text本文はrequest内部だけで扱い、成功応答やerrorには返さない。

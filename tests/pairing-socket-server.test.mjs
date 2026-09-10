@@ -477,6 +477,40 @@ test("concurrent A and B navigate requests remain on their descriptor-selected s
   assert.equal(bClickResult.backend_dom_node_id, 42);
   assert.equal(aClickResult.browser_instance_id, a.descriptor.browser_instance_id);
   assert.equal(bClickResult.browser_instance_id, b.descriptor.browser_instance_id);
+
+  const aType = a.server.requestType({
+    requestId: "type-a",
+    tabId: 7,
+    loaderId: "loader-7",
+    backendDomNodeId: 41,
+    text: "A only",
+  });
+  const bType = b.server.requestType({
+    requestId: "type-b",
+    tabId: 8,
+    loaderId: "loader-8",
+    backendDomNodeId: 42,
+    text: "B only",
+  });
+  assert.deepEqual(await aClient.next(), message(a.descriptor, "type_request", "connection-a", {
+    request_id: "type-a", tab_id: 7, loader_id: "loader-7", backend_dom_node_id: 41, text: "A only",
+  }));
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "type_request", "connection-a", {
+    request_id: "type-b", tab_id: 8, loader_id: "loader-8", backend_dom_node_id: 42, text: "B only",
+  }));
+  aClient.send(encodeNativeMessage(message(a.descriptor, "type_response", "connection-a", {
+    request_id: "type-a", tab_id: 7, loader_id: "loader-7", backend_dom_node_id: 41, accepted: true,
+  })));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "type_response", "connection-a", {
+    request_id: "type-b", tab_id: 8, loader_id: "loader-8", backend_dom_node_id: 42, accepted: true,
+  })));
+  const [aTypeResult, bTypeResult] = await Promise.all([aType, bType]);
+  assert.equal(aTypeResult.tab_id, 7);
+  assert.equal(bTypeResult.tab_id, 8);
+  assert.equal(aTypeResult.browser_instance_id, a.descriptor.browser_instance_id);
+  assert.equal(bTypeResult.browser_instance_id, b.descriptor.browser_instance_id);
+  assert.equal(Object.hasOwn(aTypeResult, "text"), false);
+  assert.equal(Object.hasOwn(bTypeResult, "text"), false);
 });
 
 test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {
@@ -540,10 +574,21 @@ test("closing the server marks pending navigate outcome unknown and read command
   const status = fixture.server.requestBrowserStatus({ requestId: "close-status", timeoutMs: 1_000 });
   const statusRejected = assert.rejects(status, (error) => error.code === "transport_closed");
   assert.equal((await client.next()).type, "browser_status_request");
+  const typing = fixture.server.requestType({
+    requestId: "close-type",
+    tabId: 7,
+    loaderId: "loader-type",
+    backendDomNodeId: 42,
+    text: "secret text",
+    timeoutMs: 1_000,
+  });
+  const typingRejected = assert.rejects(typing, (error) => error.code === "outcome_unknown");
+  assert.equal((await client.next()).type, "type_request");
 
   await fixture.server.close();
   await navigationRejected;
   await statusRejected;
+  await typingRejected;
 });
 
 test("disconnect-active-host rejects before an ACTIVE transport exists", async (t) => {

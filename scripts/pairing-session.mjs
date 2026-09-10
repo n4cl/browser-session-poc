@@ -8,7 +8,9 @@ import {
   BROWSER_ERROR_CODES,
   CLICK_LOADER_ID_MAX_LENGTH,
   SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+  TYPE_TEXT_MAX_LENGTH,
   validateClickTarget,
+  validateTypeTarget,
   validateNavigateTarget,
 } from "../core/browser-command-protocol.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
@@ -44,6 +46,29 @@ export function parseInteractiveCommand(line) {
   if (line === "status" || line === "ping" || line === "browser-status" || line === "tabs-list" ||
     line === "disconnect-active-host" || line === "quit") {
     return { type: line };
+  }
+  const typeMatch = typeof line === "string"
+    ? /^type\s+(\S+)\s+(\S+)\s+(\S+)\s+([\s\S]+)$/u.exec(line)
+    : null;
+  if (typeMatch) {
+    const [, tabToken, loaderId, backendToken, jsonText] = typeMatch;
+    if (!/^(0|[1-9]\d*)$/.test(tabToken) || !/^[1-9]\d*$/.test(backendToken) ||
+      loaderId.length > CLICK_LOADER_ID_MAX_LENGTH) return null;
+    let text;
+    try {
+      text = JSON.parse(jsonText);
+    } catch {
+      return null;
+    }
+    const tabId = Number(tabToken);
+    const backendDomNodeId = Number(backendToken);
+    if (!Number.isSafeInteger(tabId) || !Number.isSafeInteger(backendDomNodeId) ||
+      typeof text !== "string" || text.length === 0 || text.length > TYPE_TEXT_MAX_LENGTH) return null;
+    try {
+      return { type: "type", ...validateTypeTarget({ tabId, loaderId, backendDomNodeId, text }) };
+    } catch {
+      return null;
+    }
   }
   const parts = typeof line === "string" ? line.split(" ") : [];
   if (parts.length === 2 && parts[0] === "snapshot" && /^(0|[1-9]\d*)$/.test(parts[1])) {
@@ -192,6 +217,28 @@ export async function runPairingSession({
           const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
           output.write(`click failed${errorCode}\n`);
         }
+      } else if (interactive?.type === "type") {
+        try {
+          const result = await harness.server.requestType({
+            requestId: createRequestId(),
+            tabId: interactive.tabId,
+            loaderId: interactive.loaderId,
+            backendDomNodeId: interactive.backendDomNodeId,
+            text: interactive.text,
+            timeoutMs: SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
+          });
+          output.write(`${JSON.stringify({
+            command: "type",
+            generation: result.generation,
+            tab_id: result.tab_id,
+            loader_id: result.loader_id,
+            backend_dom_node_id: result.backend_dom_node_id,
+            accepted: result.accepted,
+          })}\n`);
+        } catch (error) {
+          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
+          output.write(`type failed${errorCode}\n`);
+        }
       } else if (interactive?.type === "disconnect-active-host") {
         try {
           harness.server.disconnectActiveHost();
@@ -208,6 +255,8 @@ export async function runPairingSession({
             ? "error invalid_snapshot"
             : typeof line === "string" && line.startsWith("click")
               ? "error invalid_click"
+            : typeof line === "string" && line.startsWith("type")
+              ? "error invalid_type"
             : "error unknown_command"}\n`);
       }
     }

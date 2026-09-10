@@ -1,4 +1,4 @@
-import { normalizeSnapshot } from "./pairing-protocol.mjs";
+import { normalizeSnapshot, TYPE_TEXT_MAX_LENGTH } from "./pairing-protocol.mjs";
 
 export const SNAPSHOT_ERROR_CODES = Object.freeze([
   "debugger_unavailable",
@@ -18,6 +18,18 @@ export const CLICK_ERROR_CODES = Object.freeze([
   "node_not_found",
   "not_interactable",
   "click_failed",
+  "outcome_unknown",
+  "debugger_detach_failed",
+]);
+export const TYPE_ERROR_CODES = Object.freeze([
+  "debugger_unavailable",
+  "tab_not_found",
+  "debugger_busy",
+  "debugger_attach_failed",
+  "stale_document",
+  "node_not_found",
+  "not_editable",
+  "type_failed",
   "outcome_unknown",
   "debugger_detach_failed",
 ]);
@@ -75,7 +87,7 @@ function quadCenter(quads) {
 }
 
 /**
- * Runs snapshot and click operations for one Extension service-worker controller.
+ * Runs snapshot, click, and type operations for one Extension service-worker controller.
  * Operations are serialized per tab; separate Chrome profiles use separate controllers.
  */
 export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
@@ -233,7 +245,39 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
     }, "click_failed");
   }
 
-  return Object.freeze({ snapshot, click });
+  async function type(tabId, loaderId, backendDomNodeId, text) {
+    if (!isLoaderId(loaderId) || !isBackendDomNodeId(backendDomNodeId) ||
+      typeof text !== "string" || text.length === 0 || text.length > TYPE_TEXT_MAX_LENGTH) {
+      throw failure("type_failed");
+    }
+    return runTabOperation(tabId, async ({ sendCommand, context }) => {
+      let frameTreeResponse;
+      try {
+        frameTreeResponse = await sendCommand("Page.getFrameTree");
+      } catch {
+        throw failure("type_failed");
+      }
+      const frameTree = frameTreeResponse?.frameTree;
+      const currentLoaderId = frameTree?.frame?.loaderId;
+      if (!frameTree || typeof frameTree !== "object" || !isLoaderId(currentLoaderId)) throw failure("type_failed");
+      if (currentLoaderId !== loaderId) throw failure("stale_document");
+
+      try {
+        await sendCommand("DOM.focus", { backendNodeId: backendDomNodeId });
+      } catch {
+        throw failure("not_editable");
+      }
+      try {
+        context.mutationMayHaveOccurred = true;
+        await sendCommand("Input.insertText", { text });
+      } catch {
+        throw failure("outcome_unknown");
+      }
+      return { tabId, loaderId, backendDomNodeId, accepted: true };
+    }, "type_failed");
+  }
+
+  return Object.freeze({ snapshot, click, type });
 }
 
 export async function runDebuggerSnapshot(options) {

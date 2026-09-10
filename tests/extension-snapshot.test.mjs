@@ -43,6 +43,20 @@ function clickRequest({ tabId = 7, loaderId = "loader-click", backendDomNodeId =
   };
 }
 
+function typeRequest({ tabId = 7, loaderId = "loader-type", backendDomNodeId = 42, text = "hello world" } = {}) {
+  return {
+    type: "type_request",
+    request_id: "type-1",
+    protocol_version: 1,
+    ...binding,
+    host_connection_id: "connection-a",
+    tab_id: tabId,
+    loader_id: loaderId,
+    backend_dom_node_id: backendDomNodeId,
+    text,
+  };
+}
+
 function node(nodeId, parentId = undefined, overrides = {}) {
   return {
     nodeId,
@@ -377,6 +391,69 @@ test("debugger click reports outcome_unknown when cleanup fails after a successf
   );
 });
 
+test("debugger type focuses and inserts text without returning the text", async () => {
+  const { api, calls } = apiFixture({
+    sendCommand: async (_target, method, params) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-type" } } };
+      if (method === "DOM.focus") {
+        assert.deepEqual(params, { backendNodeId: 42 });
+        return {};
+      }
+      if (method === "Input.insertText") {
+        assert.deepEqual(params, { text: "hello world" });
+        return {};
+      }
+      return {};
+    },
+  });
+  const result = await createDebuggerSnapshotRunner({ chromeApi: api }).type(7, "loader-type", 42, "hello world");
+  assert.deepEqual(result, { tabId: 7, loaderId: "loader-type", backendDomNodeId: 42, accepted: true });
+  assert.equal(Object.hasOwn(result, "text"), false);
+  assert.deepEqual(calls.map(([name, ...args]) => [name, ...args]), [
+    ["tabs.get", 7],
+    ["attach", { tabId: 7 }, "1.3"],
+    ["sendCommand", { tabId: 7 }, "Page.getFrameTree"],
+    ["sendCommand", { tabId: 7 }, "DOM.focus", { backendNodeId: 42 }],
+    ["sendCommand", { tabId: 7 }, "Input.insertText", { text: "hello world" }],
+    ["detach", { tabId: 7 }],
+  ]);
+});
+
+test("debugger type rejects stale documents and shares the snapshot tab lock", async () => {
+  let releaseFrameTree;
+  const frameTreeWait = new Promise((resolve) => { releaseFrameTree = resolve; });
+  const { api } = apiFixture({
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") {
+        await frameTreeWait;
+        return { frameTree: { frame: { loaderId: "loader-new" } } };
+      }
+      return {};
+    },
+  });
+  const runner = createDebuggerSnapshotRunner({ chromeApi: api });
+  const typing = runner.type(7, "loader-old", 42, "hello");
+  await Promise.resolve();
+  await assert.rejects(() => runner.snapshot(7), (error) => error.code === "debugger_busy");
+  releaseFrameTree();
+  await assert.rejects(typing, (error) => error.code === "stale_document");
+});
+
+test("debugger type reports outcome_unknown after insert uncertainty and cleanup failure", async () => {
+  const { api } = apiFixture({
+    detach() { throw new Error("detach detail"); },
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-type" } } };
+      if (method === "Input.insertText") throw new Error("transport detail");
+      return {};
+    },
+  });
+  await assert.rejects(
+    () => createDebuggerSnapshotRunner({ chromeApi: api }).type(7, "loader-type", 42, "hello"),
+    (error) => error.code === "outcome_unknown",
+  );
+});
+
 test("background forwards click through the paired identity and keeps the response target-correlated", async () => {
   const port = pairingPort();
   const { api } = apiFixture({
@@ -400,6 +477,58 @@ test("background forwards click through the paired identity and keeps the respon
     backend_dom_node_id: 42,
     accepted: true,
   });
+});
+
+test("background forwards type without echoing text in the response", async () => {
+  const port = pairingPort();
+  const { api } = apiFixture({
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-type" } } };
+      return {};
+    },
+  });
+  await pairedController(pairingChrome(port, api.debugger), port);
+  port.emit(typeRequest());
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(port.messages.at(-1), {
+    type: "type_response",
+    request_id: "type-1",
+    protocol_version: 1,
+    ...binding,
+    host_connection_id: "connection-a",
+    tab_id: 7,
+    loader_id: "loader-type",
+    backend_dom_node_id: 42,
+    accepted: true,
+  });
+  assert.equal(JSON.stringify(port.messages.at(-1)).includes("hello world"), false);
+});
+
+test("background returns a fixed type error without exposing text", async () => {
+  const port = pairingPort();
+  const { api } = apiFixture({
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-type" } } };
+      if (method === "DOM.focus") throw new Error("secret text must not escape");
+      return {};
+    },
+  });
+  await pairedController(pairingChrome(port, api.debugger), port);
+  port.emit(typeRequest({ text: "secret text" }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(port.messages.at(-1), {
+    type: "browser_error_response",
+    request_id: "type-1",
+    protocol_version: 1,
+    ...binding,
+    host_connection_id: "connection-a",
+    command: "type",
+    error_code: "not_editable",
+    tab_id: 7,
+    loader_id: "loader-type",
+    backend_dom_node_id: 42,
+  });
+  assert.equal(JSON.stringify(port.messages.at(-1)).includes("secret"), false);
 });
 
 test("debugger snapshot handles official frameTree and AX nodes response shapes", async () => {

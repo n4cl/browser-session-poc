@@ -111,6 +111,36 @@ test("pairing CLI parses click with an explicit snapshot target", () => {
   }
 });
 
+test("pairing CLI parses type JSON text strictly and preserves no text in output", () => {
+  assert.deepEqual(parseInteractiveCommand('type 7 loader-a 42 "hello world"'), {
+    type: "type",
+    tabId: 7,
+    loaderId: "loader-a",
+    backendDomNodeId: 42,
+    text: "hello world",
+  });
+  assert.deepEqual(parseInteractiveCommand('type 7 loader-a 42 "line\\ntext"'), {
+    type: "type",
+    tabId: 7,
+    loaderId: "loader-a",
+    backendDomNodeId: 42,
+    text: "line\ntext",
+  });
+  for (const command of [
+    "type",
+    "type 7 loader-a 42",
+    "type 07 loader-a 42 \"hello\"",
+    "type 7 loader-a 0 \"hello\"",
+    "type 7 loader-a 42 hello",
+    "type 7 loader-a 42 \"\"",
+    "type 7 loader-a 42 \"hello\" extra",
+    `type 7 loader-a 42 ${JSON.stringify("x".repeat(4_097))}`,
+    `type 7 ${"a".repeat(257)} 42 "hello"`,
+  ]) {
+    assert.equal(parseInteractiveCommand(command), null);
+  }
+});
+
 test("pairing CLI reports status, rejects unknown commands, and closes once on quit", async () => {
   const output = writableCapture();
   const errorOutput = writableCapture();
@@ -348,6 +378,53 @@ test("pairing CLI dispatches click with strict target correlation and fixed erro
     "",
   ].join("\n"));
   assert.doesNotMatch(output.value(), /raw click detail/);
+});
+
+test("pairing CLI dispatches type with text request-only and fixed errors", async () => {
+  const output = writableCapture();
+  const calls = [];
+  let invocation = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(['type 7 loader-a 42 "hello world"', 'type 7 loader-b 43 "secret"', "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    createRequestId: () => `request-type-${++invocation}`,
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestType(options) {
+          calls.push(options);
+          if (options.loaderId === "loader-b") {
+            const error = new Error("raw type detail secret");
+            error.code = "not_editable";
+            throw error;
+          }
+          return {
+            generation: 3,
+            tab_id: 7,
+            loader_id: "loader-a",
+            backend_dom_node_id: 42,
+            accepted: true,
+          };
+        },
+      },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [
+    { requestId: "request-type-1", tabId: 7, loaderId: "loader-a", backendDomNodeId: 42, text: "hello world", timeoutMs: 5_000 },
+    { requestId: "request-type-2", tabId: 7, loaderId: "loader-b", backendDomNodeId: 43, text: "secret", timeoutMs: 5_000 },
+  ]);
+  assert.equal(output.value(), [
+    "ready poc-a ISSUED",
+    '{"command":"type","generation":3,"tab_id":7,"loader_id":"loader-a","backend_dom_node_id":42,"accepted":true}',
+    "type failed not_editable",
+    "",
+  ].join("\n"));
+  assert.doesNotMatch(output.value(), /hello world|secret|raw type detail/);
 });
 
 test("pairing CLI reports browser command failures without exposing transport details and still cleans up", async () => {

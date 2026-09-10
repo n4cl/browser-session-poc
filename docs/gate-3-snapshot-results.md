@@ -38,4 +38,4 @@ Accessibility snapshotが、A/Bそれぞれの専用profile・generation・tab�
 
 **snapshot作業単位の実機試験は合格。** 管理reload後の自動rebind、A/Bのgeneration・tab分離、近接並行snapshotのresponse相関、直後のACTIVE継続を確認した。
 
-ただし、Gate 3全体は`click`と`type`が未実装・未合格であるため、Gate 3自体は引き続き未合格とする。
+ただし、Gate 3全体は`type`の実機試験が未実施・未合格であるため、Gate 3自体は引き続き未合格とする。

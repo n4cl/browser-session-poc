@@ -8,6 +8,7 @@ export const SNAPSHOT_DEPTH_MAX = 16;
 export const SNAPSHOT_TEXT_MAX_LENGTH = 512;
 export const SNAPSHOT_LOADER_ID_MAX_LENGTH = 256;
 export const CLICK_LOADER_ID_MAX_LENGTH = SNAPSHOT_LOADER_ID_MAX_LENGTH;
+export const TYPE_TEXT_MAX_LENGTH = 4_096;
 export const BROWSER_ERROR_CODES = Object.freeze([
   "debugger_unavailable",
   "tab_not_found",
@@ -19,6 +20,8 @@ export const BROWSER_ERROR_CODES = Object.freeze([
   "node_not_found",
   "not_interactable",
   "click_failed",
+  "not_editable",
+  "type_failed",
   "response_too_large",
   "tabs_unavailable",
   "navigation_failed",
@@ -26,7 +29,7 @@ export const BROWSER_ERROR_CODES = Object.freeze([
   "timeout",
   "transport_closed",
 ]);
-const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot", "click"]);
+const BROWSER_COMMANDS = Object.freeze(["browser_status", "tabs_list", "navigate", "snapshot", "click", "type"]);
 
 const BINDING_FIELDS = [
   "session_id",
@@ -117,6 +120,12 @@ function validateClickTarget({ tabId, loaderId, backendDomNodeId }) {
   return { tabId, loaderId, backendDomNodeId };
 }
 
+function validateTypeTarget({ tabId, loaderId, backendDomNodeId, text }) {
+  const target = validateClickTarget({ tabId, loaderId, backendDomNodeId });
+  if (typeof text !== "string" || text.length === 0 || text.length > TYPE_TEXT_MAX_LENGTH) fail();
+  return { ...target, text };
+}
+
 function validateBrowserRequest(message, binding, hostConnectionId, command) {
   if (!BROWSER_COMMANDS.includes(command)) fail();
   const extraFields = command === "navigate"
@@ -125,6 +134,8 @@ function validateBrowserRequest(message, binding, hostConnectionId, command) {
       ? ["tab_id"]
       : command === "click"
         ? ["tab_id", "loader_id", "backend_dom_node_id"]
+        : command === "type"
+          ? ["tab_id", "loader_id", "backend_dom_node_id", "text"]
         : [];
   exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id", ...extraFields]);
   if (message.type !== `${command}_request` || !nonEmptyString(message.request_id) || message.request_id.length > 128) fail();
@@ -140,6 +151,12 @@ function validateBrowserRequest(message, binding, hostConnectionId, command) {
     tabId: message.tab_id,
     loaderId: message.loader_id,
     backendDomNodeId: message.backend_dom_node_id,
+  });
+  if (command === "type") return validateTypeTarget({
+    tabId: message.tab_id,
+    loaderId: message.loader_id,
+    backendDomNodeId: message.backend_dom_node_id,
+    text: message.text,
   });
   return undefined;
 }
@@ -278,6 +295,25 @@ export function respondToClick(message, binding, hostConnectionId, target) {
     target.backendDomNodeId !== requestTarget.backendDomNodeId) fail();
   return assertResponseSize({
     type: "click_response",
+    request_id: message.request_id,
+    ...responseIdentity(binding, hostConnectionId),
+    tab_id: target.tabId,
+    loader_id: target.loaderId,
+    backend_dom_node_id: target.backendDomNodeId,
+    accepted: true,
+  });
+}
+
+export function validateTypeRequest(message, binding, hostConnectionId) {
+  return validateBrowserRequest(message, binding, hostConnectionId, "type");
+}
+
+export function respondToType(message, binding, hostConnectionId, target) {
+  const requestTarget = validateTypeRequest(message, binding, hostConnectionId);
+  if (!target || target.tabId !== requestTarget.tabId || target.loaderId !== requestTarget.loaderId ||
+    target.backendDomNodeId !== requestTarget.backendDomNodeId) fail();
+  return assertResponseSize({
+    type: "type_response",
     request_id: message.request_id,
     ...responseIdentity(binding, hostConnectionId),
     tab_id: target.tabId,
@@ -536,6 +572,11 @@ export function respondToBrowserError(message, binding, hostConnectionId, comman
     error_code: errorCode,
   };
   if (command === "click") {
+    response.tab_id = target.tabId;
+    response.loader_id = target.loaderId;
+    response.backend_dom_node_id = target.backendDomNodeId;
+  }
+  if (command === "type") {
     response.tab_id = target.tabId;
     response.loader_id = target.loaderId;
     response.backend_dom_node_id = target.backendDomNodeId;
