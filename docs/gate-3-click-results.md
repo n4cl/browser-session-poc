@@ -15,7 +15,7 @@
 3. A/Bそれぞれのlocalhostページからfresh snapshotを取得し、別loader、別tab、各ページ固有のbuttonとbackend DOM nodeを内部で選択した。
 4. A/Bへnear-concurrentにclickを発行し、両方の応答が`accepted: true`となることを確認した。
 5. 直後にA/Bのsnapshotを取得し、AにはA固有のclicked/done状態だけ、BにはB固有のclicked/done状態だけが現れ、loaderが継続していることを確認した。
-6. Aだけをnavigateした後、旧loaderと旧backend DOM nodeでclickを試し、`stale_document`となることを確認した。その後もA/Bの`ping`とphaseは正常な`ACTIVE`だった。
+6. Aだけをnavigateした後、旧loaderと旧backend DOM nodeでclickを試し、`stale_document`となることを確認した。その後、Aの`ping`が成功しphaseが`ACTIVE`であることを再確認した。Bについては、手順5のpost-snapshot時点で`ping`成功・`ACTIVE`を確認しており、stale試験後には再照会していない。
 7. A/B間のcross-routingとNative Host終了がないことを確認し、localhost server停止と一時ファイル削除を完了した。
 
 ## 実結果
@@ -29,7 +29,7 @@
 | near-concurrent click | A/Bとも`accepted: true` |
 | click後snapshot | AはA固有状態のみ、BはB固有状態のみ。loader継続 |
 | stale document | Aのnavigate後、旧loader/nodeは`stale_document` |
-| 事後疎通 | A/Bとも`ping`成功、`ACTIVE`継続 |
+| 事後疎通 | Aはstale試験後に`ping`成功・`ACTIVE`を再確認。Bは手順5のpost-snapshot時点で`ping`成功・`ACTIVE`を確認 |
 | 分離 | cross-routingなし、Native Host終了なし |
 
 ## 判定と制約
