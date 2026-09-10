@@ -350,6 +350,7 @@ test("debugger click rejects stale documents and shares the snapshot tab lock", 
 
 test("debugger click reports outcome_unknown after mouse press uncertainty and always detaches", async () => {
   const { api, calls } = apiFixture({
+    detach() { throw new Error("detach detail"); },
     sendCommand: async (_target, method, params) => {
       if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-click" } } };
       if (method === "DOM.getContentQuads") return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] };
@@ -359,6 +360,21 @@ test("debugger click reports outcome_unknown after mouse press uncertainty and a
   });
   await assert.rejects(() => createDebuggerSnapshotRunner({ chromeApi: api }).click(7, "loader-click", 42), (error) => error.code === "outcome_unknown");
   assert.deepEqual(calls.at(-1), ["detach", { tabId: 7 }]);
+});
+
+test("debugger click reports outcome_unknown when cleanup fails after a successful click", async () => {
+  const { api } = apiFixture({
+    detach() { throw new Error("detach detail"); },
+    sendCommand: async (_target, method) => {
+      if (method === "Page.getFrameTree") return { frameTree: { frame: { loaderId: "loader-click" } } };
+      if (method === "DOM.getContentQuads") return { quads: [[0, 0, 10, 0, 10, 10, 0, 10]] };
+      return {};
+    },
+  });
+  await assert.rejects(
+    () => createDebuggerSnapshotRunner({ chromeApi: api }).click(7, "loader-click", 42),
+    (error) => error.code === "outcome_unknown",
+  );
 });
 
 test("background forwards click through the paired identity and keeps the response target-correlated", async () => {

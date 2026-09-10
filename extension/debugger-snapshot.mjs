@@ -89,7 +89,7 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
     inFlight.set(tabId, token);
 
     let attached = false;
-    const context = { accessibilityEnabled: false };
+    const context = { accessibilityEnabled: false, mutationMayHaveOccurred: false };
     let result;
     let operationError;
     try {
@@ -139,7 +139,11 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
         } catch {
           cleanupFailed = true;
         }
-        if (cleanupFailed) operationError = failure("debugger_detach_failed");
+        if (cleanupFailed) {
+          operationError = context.mutationMayHaveOccurred
+            ? failure("outcome_unknown")
+            : failure("debugger_detach_failed");
+        }
       }
       if (inFlight.get(tabId) === token) inFlight.delete(tabId);
     }
@@ -170,7 +174,7 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
 
   async function click(tabId, loaderId, backendDomNodeId) {
     if (!isLoaderId(loaderId) || !isBackendDomNodeId(backendDomNodeId)) throw failure("click_failed");
-    return runTabOperation(tabId, async ({ sendCommand }) => {
+    return runTabOperation(tabId, async ({ sendCommand, context }) => {
       let frameTreeResponse;
       try {
         frameTreeResponse = await sendCommand("Page.getFrameTree");
@@ -203,6 +207,7 @@ export function createDebuggerSnapshotRunner({ chromeApi } = {}) {
         throw failure("click_failed");
       }
       try {
+        context.mutationMayHaveOccurred = true;
         await sendCommand("Input.dispatchMouseEvent", {
           type: "mousePressed",
           x: center.x,
