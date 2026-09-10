@@ -33,13 +33,21 @@ test("instance paths are isolated by browser instance ID", () => {
   assert.equal(a.userDataDir, path.resolve("/tmp/browser-poc/profiles/a"));
 });
 
-test("Chrome arguments use an absolute dedicated profile and never auto-load an extension", () => {
+test("Chrome arguments use an absolute dedicated profile without persistent CDP", () => {
   const args = buildChromeArguments({
     userDataDir: "/tmp/browser-poc/profiles/a",
   });
   assert.ok(args.includes("--user-data-dir=/tmp/browser-poc/profiles/a"));
+  assert.equal(args.some((argument) => argument.startsWith("--remote-debugging-")), false);
   assert.equal(args.some((argument) => argument.startsWith("--load-extension=")), false);
+  const maintenanceArgs = buildChromeArguments({
+    userDataDir: "/tmp/browser-poc/profiles/a",
+    remoteDebuggingPort: 0,
+  });
+  assert.ok(maintenanceArgs.includes("--remote-debugging-address=127.0.0.1"));
+  assert.ok(maintenanceArgs.includes("--remote-debugging-port=0"));
   assert.throws(() => buildChromeArguments({ userDataDir: "relative/profile" }));
+  assert.throws(() => buildChromeArguments({ userDataDir: "/tmp/profile", remoteDebuggingPort: 65_536 }));
 });
 
 test("provisioning arguments open chrome extensions without auto-loading", () => {

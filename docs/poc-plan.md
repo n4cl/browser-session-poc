@@ -78,6 +78,7 @@ Gate 2は、instance専用profile→manifest→wrapper→descriptor→session専
 
 - 一時領域にA/Bのuser data directoryを作るlauncher
 - Chrome A/Bの起動、PID/start time記録、所有instanceだけの停止
+- 必要なときだけ一時起動する専用Chromeのloopback限定ephemeral CDPによるExtension service worker更新経路
 - dry-runと引数検証
 - 非GUI testではprocess identityのparserと照合条件だけを検証する。実Chromeの起動・`ps`照合はmacOSの実行権限がある環境でのみ行う。
 
@@ -127,7 +128,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 - nonce再利用、旧generation、別instance IDを拒否する。
 - AのHost crash/reconnect中もBが継続する。
 
-このGateに失敗した場合はbrowser toolを実装せず、方式を再検討する。
+このGateに失敗した場合はbrowser toolを実装せず、方式を再検討する。managed Chromeのunpacked Extension更新時はmanifest versionをbumpして`npm run chrome -- reload-extension <instance-id>`を使う。このコマンドは所有確認後に対象instanceを一時的なCDP付きChromeとして起動し、専用user-data-dir内の対象Extension workerだけを更新してからCDPなしの通常起動へ戻す管理経路であり、通常Chromeの`chrome://extensions`は操作しない。
 
 ### Gate 3: 最小browser tool
 

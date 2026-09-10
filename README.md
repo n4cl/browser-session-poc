@@ -40,6 +40,8 @@ npm run native-host -- uninstall poc-gate1
 
 unpacked Extensionのコードを変更した場合は、managed Chromeを再起動する前にmanifestのversionを更新して古いservice workerの登録を更新する。手動のReloadは開発時のfallbackであり、通常の運用手順ではない。
 
+`reload-extension`は対象instanceのstate、PID、起動時刻、実行ファイル、専用user-data-dirを照合してから一時停止し、同じ専用profileをloopback限定・ephemeral portのCDP付きで起動する。専用profile内の対象Extension service workerだけへ`chrome.runtime.reload()`を依頼した後、CDP付きChromeを停止し、CDPなしの通常起動へ戻す。DevTools endpointが専用profileから取得できない場合や所有確認に失敗した場合は処理を拒否する。通常Chromeや別profileへのCDP接続は行わない。
+
 ## Gate 2 Native Host wrapper
 
 `install`が生成するwrapperは、固定されたruntime rootとinstance-idをHostへ引数で渡す。Hostはそのinstanceのprofile metadataとactive descriptorだけを0600・非symlink・期限の条件で再検証し、descriptorが指定したsession socketだけへ接続する。他instanceの探索やGate 1への自動fallbackはしない。

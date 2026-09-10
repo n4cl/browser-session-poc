@@ -19,6 +19,7 @@ import {
   terminateOwnedChrome,
   writeStateAtomically,
 } from "../core/chrome-instance.mjs";
+import { reloadManagedExtension } from "../core/extension-reloader.mjs";
 
 function usage() {
   return [
@@ -29,6 +30,7 @@ function usage() {
     "  npm run chrome -- status <instance-id>",
     "  npm run chrome -- stop <instance-id>",
     "  npm run chrome -- recover <instance-id>",
+    "  npm run chrome -- reload-extension <instance-id>",
     "",
     "Environment:",
     "  BROWSER_POC_RUNTIME_ROOT  Runtime directory (default: .runtime)",
@@ -36,7 +38,7 @@ function usage() {
   ].join("\n");
 }
 
-function configuration(instanceId, { initialUrl = "about:blank" } = {}) {
+function configuration(instanceId, { initialUrl = "about:blank", enableRemoteDebugging = false } = {}) {
   const repositoryRoot = path.resolve(import.meta.dirname, "..");
   const runtimeRoot = process.env.BROWSER_POC_RUNTIME_ROOT
     ? path.resolve(process.env.BROWSER_POC_RUNTIME_ROOT)
@@ -48,6 +50,7 @@ function configuration(instanceId, { initialUrl = "about:blank" } = {}) {
   const chromeArguments = buildChromeArguments({
     userDataDir: paths.userDataDir,
     initialUrl,
+    remoteDebuggingPort: enableRemoteDebugging ? 0 : null,
   });
 
   return { instanceId, chromeExecutable, chromeArguments, extensionDir, ...paths };
@@ -89,8 +92,16 @@ async function plan(instanceId) {
   );
 }
 
-async function start(instanceId, { initialUrl = "about:blank", showManualExtensionDirectory = false } = {}) {
-  const config = configuration(instanceId, { initialUrl });
+async function start(
+  instanceId,
+  {
+    initialUrl = "about:blank",
+    showManualExtensionDirectory = false,
+    enableRemoteDebugging = false,
+    quiet = false,
+  } = {},
+) {
+  const config = configuration(instanceId, { initialUrl, enableRemoteDebugging });
   await assertChromeExecutable(config.chromeExecutable);
   assertProcessInspectionAvailable();
   const owner = {
@@ -138,19 +149,21 @@ async function start(instanceId, { initialUrl = "about:blank", showManualExtensi
     };
     await writeStateAtomically(config.statePath, state);
     stateWritten = true;
-    process.stdout.write(
-      `${JSON.stringify(
-        showManualExtensionDirectory
-          ? {
-              ...state,
-              manual_extension_directory: config.extensionDir,
-              next_step: "Use Load unpacked in chrome://extensions and select manual_extension_directory",
-            }
-          : state,
-        null,
-        2,
-      )}\n`,
-    );
+    if (!quiet) {
+      process.stdout.write(
+        `${JSON.stringify(
+          showManualExtensionDirectory
+            ? {
+                ...state,
+                manual_extension_directory: config.extensionDir,
+                next_step: "Use Load unpacked in chrome://extensions and select manual_extension_directory",
+              }
+            : state,
+          null,
+          2,
+        )}\n`,
+      );
+    }
   } catch (error) {
     if (!child) {
       await releaseInstanceClaim(config.claimPath);
@@ -182,7 +195,7 @@ async function status(instanceId) {
   }
 }
 
-async function stop(instanceId) {
+async function stop(instanceId, { quiet = false } = {}) {
   const config = configuration(instanceId);
   const state = await readState(config.statePath);
   assertStateMatchesConfiguration(state, config);
@@ -206,7 +219,9 @@ async function stop(instanceId) {
     stopped_at: new Date().toISOString(),
   });
   await releaseInstanceClaim(config.claimPath);
-  process.stdout.write(`stopped ${instanceId}\n`);
+  if (!quiet) {
+    process.stdout.write(`stopped ${instanceId}\n`);
+  }
 }
 
 async function recover(instanceId) {
@@ -219,6 +234,47 @@ async function recover(instanceId) {
     claimPath: config.claimPath,
   });
   process.stdout.write(`recovered ${instanceId}\n`);
+}
+
+async function reloadExtension(instanceId) {
+  const config = configuration(instanceId);
+  const state = await readState(config.statePath);
+  assertStateMatchesConfiguration(state, config);
+  if (state.state !== "running") {
+    throw new Error("refusing to reload Extension: managed Chrome is not running");
+  }
+  const identity = readProcessIdentity(state.chrome_pid);
+  if (!processMatchesState({ state, identity })) {
+    throw new Error("refusing to reload Extension: managed Chrome identity no longer matches");
+  }
+
+  await stop(instanceId, { quiet: true });
+  let maintenanceStarted = false;
+  const maintenanceNotBefore = Date.now() - 5_000;
+  try {
+    await start(instanceId, { enableRemoteDebugging: true, quiet: true });
+    maintenanceStarted = true;
+    const maintenanceConfig = configuration(instanceId, { enableRemoteDebugging: true });
+    const maintenanceState = await readState(maintenanceConfig.statePath);
+    assertStateMatchesConfiguration(maintenanceState, maintenanceConfig);
+    if (maintenanceState.state !== "running") {
+      throw new Error("refusing to reload Extension: maintenance Chrome is not running");
+    }
+    const maintenanceIdentity = readProcessIdentity(maintenanceState.chrome_pid);
+    if (!processMatchesState({ state: maintenanceState, identity: maintenanceIdentity })) {
+      throw new Error("refusing to reload Extension: maintenance Chrome identity no longer matches");
+    }
+    await reloadManagedExtension({
+      userDataDir: maintenanceConfig.userDataDir,
+      minimumMtimeMs: maintenanceNotBefore,
+    });
+  } finally {
+    if (maintenanceStarted) {
+      await stop(instanceId, { quiet: true });
+    }
+    await start(instanceId, { quiet: true });
+  }
+  process.stdout.write(`reloaded-extension ${instanceId}\n`);
 }
 
 const [command, instanceId, ...extraArguments] = process.argv.slice(2);
@@ -243,6 +299,8 @@ try {
     await stop(instanceId);
   } else if (command === "recover") {
     await recover(instanceId);
+  } else if (command === "reload-extension") {
+    await reloadExtension(instanceId);
   } else {
     process.stderr.write(`${usage()}\n`);
     process.exitCode = 2;

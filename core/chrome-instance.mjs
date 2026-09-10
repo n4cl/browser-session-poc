@@ -30,9 +30,12 @@ export function resolveInstancePaths({ runtimeRoot, instanceId }) {
   };
 }
 
-export function buildChromeArguments({ userDataDir, initialUrl = "about:blank" }) {
+export function buildChromeArguments({ userDataDir, initialUrl = "about:blank", remoteDebuggingPort = null }) {
   if (!path.isAbsolute(userDataDir)) {
     throw new Error("user data directory must be an absolute path");
+  }
+  if (remoteDebuggingPort !== null && (!Number.isSafeInteger(remoteDebuggingPort) || remoteDebuggingPort < 0 || remoteDebuggingPort > 65_535)) {
+    throw new Error("remote debugging port must be between 0 and 65535");
   }
 
   const arguments_ = [
@@ -40,6 +43,9 @@ export function buildChromeArguments({ userDataDir, initialUrl = "about:blank" }
     "--no-first-run",
     "--no-default-browser-check",
   ];
+  if (remoteDebuggingPort !== null) {
+    arguments_.push("--remote-debugging-address=127.0.0.1", `--remote-debugging-port=${remoteDebuggingPort}`);
+  }
   arguments_.push("--new-window", initialUrl);
   return arguments_;
 }
