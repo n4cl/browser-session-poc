@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createPairAck,
   startPairing,
+  validateRebindRequired,
   validatePairActive,
   validatePairChallenge,
 } from "../extension/pairing-protocol.mjs";
@@ -50,13 +51,15 @@ function fakePort() {
   };
 }
 
-function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined, storageSet = undefined } = {}) {
+function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined, storageSet = undefined, storageRemove = undefined } = {}) {
   const storage = storedBinding === undefined ? {} : { pairing_binding: storedBinding };
   const setCalls = [];
+  const removeCalls = [];
   const connectedNames = [];
   return {
     storage,
     setCalls,
+    removeCalls,
     connectedNames,
     api: {
       runtime: {
@@ -75,6 +78,11 @@ function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, t
             setCalls.push(value);
             if (storageSet) return storageSet(value);
             Object.assign(storage, value);
+          },
+          async remove(key) {
+            removeCalls.push(key);
+            if (storageRemove) return storageRemove(key);
+            delete storage[key];
           },
         },
       },
@@ -113,6 +121,9 @@ test("pure Extension protocol creates initial/resume starts and accepts pair_act
   assert.throws(() => validatePairActive(active("other"), initial));
   assert.throws(() => validatePairChallenge(challenge("resume"), { binding: null }));
   assert.throws(() => validatePairChallenge({ ...challenge(), unexpected: true }, { binding: null }));
+  assert.equal(validateRebindRequired({ type: "rebind_required", protocol_version: 1 }), true);
+  assert.throws(() => validateRebindRequired({ type: "rebind_required", protocol_version: 2 }));
+  assert.throws(() => validateRebindRequired({ type: "rebind_required", protocol_version: 1, detail: "secret" }));
 });
 
 test("initial pairing does not persist before pair_active and persists only the confirmed binding", async () => {
@@ -369,6 +380,132 @@ test("resume preserves its stored binding and malformed pair_active disconnects 
   await settle();
   assert.equal(invalidPort.disconnected, true);
   assert.deepEqual(invalidChrome.setCalls, []);
+});
+
+test("stale resume clears only the pairing binding and retries initial pairing once", async () => {
+  const first = fakePort();
+  const second = fakePort();
+  const chrome = fakeChrome({ storedBinding: binding, ports: [first, second] });
+  const timers = [];
+  const errors = [];
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer(callback, delay) {
+      const timer = { callback, delay };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer() {},
+    reportError(...args) { errors.push(args); },
+  });
+
+  await controller.connect();
+  assert.deepEqual(first.messages, [{ type: "resume_start", protocol_version: 1, ...binding }]);
+  first.emitMessage({ type: "rebind_required", protocol_version: 1 });
+  await settle();
+
+  assert.deepEqual(chrome.removeCalls, ["pairing_binding"]);
+  assert.equal(chrome.storage.pairing_binding, undefined);
+  assert.equal(first.disconnected, true);
+  assert.deepEqual(errors, []);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 100);
+
+  timers[0].callback();
+  await settle();
+  assert.deepEqual(second.messages, [{ type: "pair_start", protocol_version: 1 }]);
+  second.emitMessage(challenge("initial"));
+  await settle();
+  second.emitMessage(active());
+  await settle();
+  assert.deepEqual(chrome.setCalls, [{ pairing_binding: binding }]);
+  assert.equal(controller.getState().phase, "ACTIVE");
+});
+
+test("rebind is rejected without clearing storage for malformed, initial, and active messages", async () => {
+  const malformedPort = fakePort();
+  const malformedErrors = [];
+  const malformedChrome = fakeChrome({ storedBinding: binding, ports: [malformedPort] });
+  const malformedController = createPairingController({
+    chromeApi: malformedChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { malformedErrors.push(args); },
+  });
+  await malformedController.connect();
+  malformedPort.emitMessage({ type: "rebind_required", protocol_version: 2 });
+  await settle();
+  assert.deepEqual(malformedChrome.removeCalls, []);
+  assert.deepEqual(malformedErrors, [["Native Messaging pairing protocol failure", {
+    stage: "pair_rebind_required",
+    reason: "validation",
+  }]]);
+  assert.equal(malformedPort.disconnected, true);
+
+  const initialPort = fakePort();
+  const initialErrors = [];
+  const initialChrome = fakeChrome({ ports: [initialPort] });
+  const initialController = createPairingController({
+    chromeApi: initialChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { initialErrors.push(args); },
+  });
+  await initialController.connect();
+  initialPort.emitMessage({ type: "rebind_required", protocol_version: 1 });
+  await settle();
+  assert.deepEqual(initialChrome.removeCalls, []);
+  assert.deepEqual(initialErrors, [["Native Messaging pairing protocol failure", {
+    stage: "pair_rebind_required",
+    reason: "validation",
+  }]]);
+
+  const activePort = fakePort();
+  const activeErrors = [];
+  const activeChrome = fakeChrome({ storedBinding: binding, ports: [activePort] });
+  const activeController = createPairingController({
+    chromeApi: activeChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { activeErrors.push(args); },
+  });
+  await activeController.connect();
+  activePort.emitMessage(challenge("resume"));
+  await settle();
+  activePort.emitMessage(active());
+  await settle();
+  activePort.emitMessage({ type: "rebind_required", protocol_version: 1 });
+  await settle();
+  assert.deepEqual(activeChrome.removeCalls, []);
+  assert.deepEqual(activeErrors, [["Native Messaging pairing protocol failure", {
+    stage: "unexpected_message",
+    reason: "unexpected",
+  }]]);
+  assert.equal(activePort.disconnected, true);
+});
+
+test("stale rebind storage failure reports fixed diagnostics and preserves the binding", async () => {
+  const port = fakePort();
+  const errors = [];
+  const chrome = fakeChrome({
+    storedBinding: binding,
+    ports: [port],
+    storageRemove() { throw new Error("secret storage failure"); },
+  });
+  const controller = createPairingController({
+    chromeApi: chrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { errors.push(args); },
+  });
+  await controller.connect();
+  port.emitMessage({ type: "rebind_required", protocol_version: 1 });
+  await settle();
+
+  assert.deepEqual(chrome.removeCalls, ["pairing_binding"]);
+  assert.deepEqual(chrome.storage.pairing_binding, binding);
+  assert.deepEqual(errors, [["Native Messaging pairing protocol failure", {
+    stage: "pair_rebind_storage",
+    reason: "storage",
+  }]]);
+  assert.doesNotMatch(JSON.stringify(errors), /secret storage failure|session-a|browser-a/);
+  assert.equal(port.disconnected, true);
 });
 
 test("handshake disconnect reports an error and schedules one bounded reconnect", async () => {

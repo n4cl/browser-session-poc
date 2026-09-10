@@ -161,16 +161,22 @@ function assertPairStart(message) {
   }
 }
 
-function assertResumeStart(message, descriptor) {
+function assertResumeStartShape(message) {
   assertExactFields(message, ["type", "protocol_version", ...PAIRING_IDENTITY_FIELDS]);
   if (message.type !== "resume_start" || message.protocol_version !== PAIRING_PROTOCOL_VERSION) {
     throw new Error("invalid resume start");
   }
   for (const field of PAIRING_IDENTITY_FIELDS) {
-    if (message[field] !== descriptor[field]) {
-      throw new Error("resume identity does not match");
-    }
+    const valid = field === "generation"
+      ? Number.isSafeInteger(message[field]) && message[field] > 0
+      : isNonEmptyString(message[field]);
+    if (!valid) throw new Error("invalid resume identity");
   }
+}
+
+function assertResumeStart(message, descriptor) {
+  assertResumeStartShape(message);
+  return PAIRING_IDENTITY_FIELDS.some((field) => message[field] !== descriptor[field]);
 }
 
 function assertPairAck(message, descriptor, hostConnectionId) {
@@ -404,7 +410,15 @@ export async function runPairingNativeHost({
             failureReason = "transport";
             bridge.send(register);
           } else if (message?.type === "resume_start") {
-            assertResumeStart(message, descriptor);
+            const staleBinding = assertResumeStart(message, descriptor);
+            if (staleBinding) {
+              failureReason = "transport";
+              nativeWrite(output, {
+                type: "rebind_required",
+                protocol_version: PAIRING_PROTOCOL_VERSION,
+              });
+              return false;
+            }
             pairingMode = "resume";
             failureReason = "transport";
             bridge.send({ type: "resume", ...descriptorIdentity(descriptor, hostConnectionId) });

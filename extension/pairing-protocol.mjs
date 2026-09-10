@@ -56,6 +56,12 @@ export function validateBinding(binding) {
   return binding;
 }
 
+export function validateRebindRequired(message) {
+  exactFields(message, ["type", "protocol_version"]);
+  if (message.type !== "rebind_required" || message.protocol_version !== PAIRING_PROTOCOL_VERSION) fail();
+  return true;
+}
+
 function identityOf(message) {
   return Object.fromEntries(BINDING_FIELDS.map((field) => [field, message[field]]));
 }

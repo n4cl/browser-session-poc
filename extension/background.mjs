@@ -2,6 +2,7 @@ import {
   createPairAck,
   startPairing,
   validateBinding,
+  validateRebindRequired,
   validatePairActive,
   validatePairChallenge,
   respondToPing,
@@ -22,6 +23,8 @@ const RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000];
 
 export const PAIRING_FAILURE_STAGES = Object.freeze([
   "pair_challenge",
+  "pair_rebind_required",
+  "pair_rebind_storage",
   "pair_active_storage",
   "pair_active_validation",
   "active_ping",
@@ -121,6 +124,19 @@ export function createPairingController({
     let failureReason = "unexpected";
     try {
       if (phase === "AWAIT_CHALLENGE") {
+        if (message?.type === "rebind_required") {
+          failureStage = "pair_rebind_required";
+          failureReason = "validation";
+          validateRebindRequired(message);
+          if (binding === null) throw new Error("rebind requires a stored binding");
+          failureStage = "pair_rebind_storage";
+          failureReason = "storage";
+          await chromeApi.storage.local.remove(STORAGE_KEY);
+          binding = null;
+          if (port !== target || phase !== "AWAIT_CHALLENGE") return;
+          disconnect(target);
+          return;
+        }
         failureStage = "pair_challenge";
         failureReason = "validation";
         challenge = validatePairChallenge(message, { binding });

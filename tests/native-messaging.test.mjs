@@ -892,6 +892,48 @@ test("pairing Native Host validates resume bindings and cannot use another insta
   assert.equal(wrongDescriptorOutput.read(), null);
 });
 
+test("pairing Native Host requests a rebind for a stale resume without registering it", async () => {
+  const fixture = await pairingFixture();
+  const bridge = bridgeFor({
+    socket_path: fixture.descriptor.socket_path,
+    message: { type: "unused" },
+  });
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const outputQueue = nativeOutputQueue(output);
+  const failures = [];
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr: new PassThrough(),
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => "connection-stale",
+    socketConnector: bridge.connector,
+    recordFailure: async (marker) => failures.push(marker),
+    now: PAIRING_NOW,
+  });
+  input.end(encodeNativeMessage({
+    type: "resume_start",
+    protocol_version: 1,
+    session_id: "stale-session",
+    browser_instance_id: fixture.descriptor.browser_instance_id,
+    profile_instance_id: fixture.descriptor.profile_instance_id,
+    generation: fixture.descriptor.generation,
+    lease_id: fixture.descriptor.lease_id,
+  }));
+
+  assert.equal(await run, false);
+  assert.deepEqual(await outputQueue.next(), {
+    type: "rebind_required",
+    protocol_version: 1,
+  });
+  assert.deepEqual(bridge.sent, []);
+  assert.equal(bridge.closed, true);
+  assert.deepEqual(failures, []);
+});
+
 test("pairing Native Host rejects socket failures, expired descriptors, and mismatched acknowledgements", async () => {
   const fixture = await pairingFixture();
   const connectionId = "connection-a";
