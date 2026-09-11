@@ -65,7 +65,7 @@ async function activeClient(descriptor) {
   assert.equal((await next()).type, "pair_challenge");
   socket.write(encodeNativeMessage(message(descriptor, "pair_ack")));
   assert.equal((await next()).type, "pair_active");
-  return { socket, next };
+  return { socket, next, hasMessage: () => messages.length > 0 };
 }
 
 function auditError() {
@@ -154,4 +154,70 @@ test("completion audit failure maps mutation to outcome_unknown and read to audi
     status: { extension_connected: true, chrome_tabs_available: true },
   })));
   await assert.rejects(status, (error) => error.code === AUDIT_ERROR_CODE);
+});
+
+test("browser timeout starts after issued audit and dispatch", async (t) => {
+  const events = [];
+  let releaseIssued;
+  const issuedGate = new Promise((resolve) => { releaseIssued = resolve; });
+  const logger = {
+    async write(event) {
+      events.push(event);
+      if (event.outcome === "issued") await issuedGate;
+    },
+    async close() {},
+  };
+  const fixture = await serverFixture(logger);
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await activeClient(fixture.descriptor);
+  t.after(() => client.socket.destroy());
+
+  const navigation = fixture.server.requestNavigate({
+    requestId: "audit-delayed-timeout",
+    tabId: 7,
+    url: "https://example.test/",
+    timeoutMs: 20,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(events.map((event) => event.outcome), ["issued"]);
+  assert.equal(client.hasMessage(), false);
+  releaseIssued();
+  assert.equal((await client.next()).type, "navigate_request");
+  await assert.rejects(navigation, (error) => error.code === "outcome_unknown");
+  assert.deepEqual(events.map((event) => event.outcome), ["issued", "outcome_unknown"]);
+});
+
+test("closing while issued audit is pending sends nothing and records transport_closed", async (t) => {
+  const events = [];
+  let releaseIssued;
+  const issuedGate = new Promise((resolve) => { releaseIssued = resolve; });
+  const logger = {
+    async write(event) {
+      events.push(event);
+      if (event.outcome === "issued") await issuedGate;
+    },
+    async close() {},
+  };
+  const fixture = await serverFixture(logger);
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await activeClient(fixture.descriptor);
+  t.after(() => client.socket.destroy());
+
+  const navigation = fixture.server.requestNavigate({
+    requestId: "audit-close-before-dispatch",
+    tabId: 7,
+    url: "https://example.test/",
+    timeoutMs: 20,
+  });
+  const navigationRejected = assert.rejects(navigation, (error) => error.code === "transport_closed");
+  await Promise.resolve();
+  const closing = fixture.server.close();
+  await Promise.resolve();
+  assert.equal(client.hasMessage(), false);
+  releaseIssued();
+  await closing;
+  await navigationRejected;
+  assert.deepEqual(events.map((event) => event.outcome), ["issued", "transport_closed"]);
 });

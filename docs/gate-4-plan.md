@@ -82,7 +82,7 @@ G4-1でA/Bのmarkerを作成した後、Aだけを同じprofileでChrome stop/st
 
 `outcome`は`success`、固定error codeによる`failure`、`outcome_unknown`を区別する。`lease_id`、`nonce`、`host_connection_id`、URL、title、text、cookie、localStorage値、raw error、path、PIDは記録しない。入力textのdigestやlengthも、入力内容の推測に使えるためこのPoCでは記録しない。
 
-writerはopen済みfdを保持してイベントを直列化し、flush/errorを呼出し側へ返す。作成時にlstatでsymlinkでないregular file、所有UID、0600、nlink=1を確認し、途中で属性が変わった場合はfail-closedで書込みを停止する。pathを追跡して別instanceへfallbackせず、close時までfdを変更しない。書込み失敗はcommand結果を成功へ変換せず、audit failure自体は秘密を含まない固定診断として扱う。実装前に既存runtimeのatomic/private file abstractionと統合可能かを確認する。
+writerはopen済みfdを保持してイベントを直列化し、flush/errorを呼出し側へ返す。作成時にlstatでsymlinkでないregular file、所有UID、0600、nlink=1を確認し、途中で属性が変わった場合はfail-closedで書込みを停止する。pathを追跡して別instanceへfallbackせず、close時までfdを変更しない。browser commandのtimeoutはissued監査成功後のdispatch直前から計測し、issued待ち中にcloseされた未送信mutationは`transport_closed`として記録・拒否する。書込み失敗はcommand結果を成功へ変換せず、audit failure自体は秘密を含まない固定診断として扱う。
 
 ### G4-6: 実行方式と証跡
 

@@ -113,7 +113,9 @@ export class PairingSocketServer {
     this.#state = createPairingState(descriptor);
     this.#clock = clock;
     this.#setTimer = setTimer;
-    this.#clearTimer = clearTimer;
+    this.#clearTimer = (timer) => {
+      if (timer !== null) clearTimer(timer);
+    };
     this.#auditLogger = auditLogger;
   }
 
@@ -144,14 +146,16 @@ export class PairingSocketServer {
     const transition = issueBrowserCommand(this.#state, { command, requestId, target });
     this.#state = transition.state;
     const result = new Promise((resolve, reject) => {
-      const timer = this.#setTimer(() => {
-        const cancelled = cancelBrowserCommand(this.#state, requestId);
-        this.#state = cancelled.state;
-        this.#applyEffects(cancelled.effects);
-      }, timeoutMs);
-      this.#pendingBrowserCommands.set(requestId, { resolve, reject, timer, command });
+      this.#pendingBrowserCommands.set(requestId, {
+        resolve,
+        reject,
+        timer: null,
+        timeoutMs,
+        command,
+        dispatched: false,
+      });
     });
-    const dispatch = this.#dispatchBrowserCommand(transition.effects, requestId, command);
+    const dispatch = this.#dispatchBrowserCommand(transition.effects, requestId, command, timeoutMs);
     this.#trackAuditTask(dispatch);
     return result;
   }
@@ -327,7 +331,7 @@ export class PairingSocketServer {
     void tracked.finally(() => this.#auditTasks.delete(tracked)).catch(() => {});
   }
 
-  async #dispatchBrowserCommand(effects, requestId, command) {
+  async #dispatchBrowserCommand(effects, requestId, command, timeoutMs) {
     if (this.#auditLogger !== null) {
       try {
         await this.#auditEvent(requestId, command, "issued");
@@ -336,14 +340,32 @@ export class PairingSocketServer {
         return;
       }
     }
-    if (this.#pendingBrowserCommands.has(requestId)) this.#applyEffects(effects);
+    const pending = this.#pendingBrowserCommands.get(requestId);
+    if (!pending) return;
+    pending.timer = this.#setTimer(() => {
+      const current = this.#pendingBrowserCommands.get(requestId);
+      if (!current || !current.dispatched) return;
+      current.timer = null;
+      const cancelled = cancelBrowserCommand(this.#state, requestId);
+      this.#state = cancelled.state;
+      this.#applyEffects(cancelled.effects);
+    }, timeoutMs);
+    pending.dispatched = true;
+    this.#applyEffects(effects);
+  }
+
+  #clearBrowserCommandTimer(pending) {
+    if (pending.timer !== null) {
+      this.#clearTimer(pending.timer);
+      pending.timer = null;
+    }
   }
 
   #rejectBeforeBrowserDispatch(requestId) {
     const pending = this.#pendingBrowserCommands.get(requestId);
     if (!pending) return;
     this.#pendingBrowserCommands.delete(requestId);
-    this.#clearTimer(pending.timer);
+    this.#clearBrowserCommandTimer(pending);
     const cancelled = cancelBrowserCommand(this.#state, requestId);
     this.#state = cancelled.state;
     const error = new Error(AUDIT_ERROR_CODE);
@@ -355,12 +377,14 @@ export class PairingSocketServer {
     const pending = this.#pendingBrowserCommands.get(requestId);
     if (!pending) return;
     this.#pendingBrowserCommands.delete(requestId);
-    this.#clearTimer(pending.timer);
+    this.#clearBrowserCommandTimer(pending);
     this.#trackAuditTask(this.#completeBrowserCommand(pending, effect));
   }
 
   async #completeBrowserCommand(pending, effect) {
-    const outcome = effect.type === "browser_resolved"
+    const outcome = !pending.dispatched && effect.type === "browser_rejected"
+      ? "transport_closed"
+      : effect.type === "browser_resolved"
       ? "success"
       : effect.response?.errorCode ?? "transport_closed";
     let auditFailed = false;
@@ -492,7 +516,9 @@ export class PairingSocketServer {
       pending.reject(new Error("pairing socket server closed"));
     }
     for (const [requestId, pending] of this.#pendingBrowserCommands) {
-      const errorCode = ["navigate", "click", "type"].includes(pending.command) ? "outcome_unknown" : "transport_closed";
+      const errorCode = !pending.dispatched || !["navigate", "click", "type"].includes(pending.command)
+        ? "transport_closed"
+        : "outcome_unknown";
       this.#settleBrowserCommand(requestId, {
         type: "browser_rejected",
         requestId,
