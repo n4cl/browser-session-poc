@@ -191,7 +191,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
 
 ### Gate 5: Codex / Claude Code接続
 
-Gate 4まではrouting自体をCLI test harnessで検証する。合格後にstdio MCP adapterを追加し、CodexとClaude Codeから同じcoreを呼ぶ。
+進捗: **未実装**。Gate 4合格後に、同じcoreを呼ぶstdio MCP adapterを実装し、CodexとClaude Codeのlocal stdio接続を検証する。SDK比較、厳格なinstance固定、6 browser toolの境界、process lifecycle、audit、A/B実機acceptanceは[Gate 5実行計画](./gate-5-plan.md)にまとめる。このGateでは依存追加・adapter実装・Codex/Claudeの実機試験をまだ行っていない。
 
 合格条件:
 
