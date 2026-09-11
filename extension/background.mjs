@@ -19,6 +19,7 @@ import {
   validateSnapshotRequest,
   validateClickRequest,
   validateTypeRequest,
+  validateExtensionReloadRequest,
 } from "./pairing-protocol.mjs";
 import {
   createDebuggerSnapshotRunner,
@@ -45,6 +46,7 @@ export const PAIRING_FAILURE_STAGES = Object.freeze([
   "active_snapshot",
   "active_click",
   "active_type",
+  "active_extension_reload",
   "unexpected_message",
 ]);
 export const PAIRING_FAILURE_REASONS = Object.freeze([
@@ -208,7 +210,15 @@ export function createPairingController({
         phase = "ACTIVE";
         retryAttempt = 0;
       } else if (phase === "ACTIVE") {
-        if (message?.type === "ping_request") {
+        if (message?.type === "extension_reload_request") {
+          failureStage = "active_extension_reload";
+          failureReason = "validation";
+          validateExtensionReloadRequest(message, binding, activeConnectionId);
+          failureReason = "chrome_api";
+          if (typeof chromeApi.runtime?.reload !== "function") throw new Error("runtime reload unavailable");
+          chromeApi.runtime.reload();
+          return;
+        } else if (message?.type === "ping_request") {
           failureStage = "active_ping";
           failureReason = "validation";
           const response = respondToPing(message, binding, activeConnectionId);

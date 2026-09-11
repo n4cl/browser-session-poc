@@ -154,6 +154,12 @@ function assertPingMessage(message, binding, connectionId) {
   }
 }
 
+function assertExtensionReloadRequestId(requestId) {
+  if (!isNonEmptyString(requestId) || requestId.length > 128) {
+    fail("extension reload request id is invalid");
+  }
+}
+
 function next(state, changes, effects = []) {
   return { state: { ...state, ...changes }, effects };
 }
@@ -175,6 +181,8 @@ export function createPairingState(descriptor) {
     pendingRequestIds: [],
     pendingBrowserRequests: [],
     usedBrowserRequestIds: [],
+    pendingExtensionReload: null,
+    usedExtensionReloadRequestIds: [],
     expiresAt: Date.parse(descriptor.expires_at),
   };
 }
@@ -223,6 +231,11 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         for (const { requestId } of state.pendingBrowserRequests) effects.push({ type: "browser_rejected", requestId });
         effects.push({ type: "fence", connectionId: oldConnectionId });
       }
+      const reloadRecovered = state.pendingExtensionReload !== null &&
+        state.pendingExtensionReload.connectionId !== connectionId;
+      if (reloadRecovered) {
+        effects.push({ type: "extension_reload_resolved", requestId: state.pendingExtensionReload.requestId });
+      }
       return next(state, {
         phase: PAIRING_STATES.ACTIVE,
         activeConnectionId: connectionId,
@@ -230,6 +243,7 @@ export function reducePairingMessage(state, message, { now = new Date() } = {}) 
         candidateKind: null,
         pendingRequestIds: oldConnectionId === null ? state.pendingRequestIds : [],
         pendingBrowserRequests: oldConnectionId === null ? state.pendingBrowserRequests : [],
+        pendingExtensionReload: reloadRecovered ? null : state.pendingExtensionReload,
       }, effects);
     }
     case "resume": {
@@ -329,6 +343,43 @@ export function cancelPairingPing(state, requestId) {
   ]);
 }
 
+/** Issues one operator-only Extension service-worker reload request. */
+export function issueExtensionReload(state, { requestId }) {
+  if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId) {
+    fail("extension reload is not permitted in the current state");
+  }
+  assertExtensionReloadRequestId(requestId);
+  if (state.pendingExtensionReload !== null || state.usedExtensionReloadRequestIds.includes(requestId)) {
+    fail("extension reload is already pending");
+  }
+  if (state.pendingRequestIds.includes(requestId) || state.pendingBrowserRequests.some((candidate) => candidate.requestId === requestId)) {
+    fail("extension reload request id is already pending");
+  }
+  return next(state, {
+    pendingExtensionReload: { requestId, connectionId: state.activeConnectionId },
+    usedExtensionReloadRequestIds: [...state.usedExtensionReloadRequestIds, requestId],
+  }, [{
+    type: "send",
+    connectionId: state.activeConnectionId,
+    message: {
+      type: "extension_reload_request",
+      request_id: requestId,
+      ...identityMessage(state.binding, state.activeConnectionId),
+    },
+  }]);
+}
+
+export function cancelExtensionReload(state, requestId, errorCode = "transport_closed") {
+  if (state.pendingExtensionReload === null || state.pendingExtensionReload.requestId !== requestId) {
+    return next(state, {});
+  }
+  return next(state, { pendingExtensionReload: null }, [{
+    type: "extension_reload_rejected",
+    requestId,
+    errorCode,
+  }]);
+}
+
 /** Issues one Gate 3 browser command over the currently fenced active transport. */
 export function issueBrowserCommand(state, { command, requestId, target = undefined }) {
   if (state.phase !== PAIRING_STATES.ACTIVE || !state.activeConnectionId || !BROWSER_COMMANDS.includes(command)) {
@@ -382,7 +433,15 @@ export function expirePairingState(state, now = new Date()) {
     activeConnectionId: null,
     candidateConnectionId: null,
     candidateKind: null,
-  }, connectionIds.map((connectionId) => ({ type: "fence", connectionId })));
+    pendingExtensionReload: null,
+  }, [
+    ...connectionIds.map((connectionId) => ({ type: "fence", connectionId })),
+    ...(state.pendingExtensionReload === null ? [] : [{
+      type: "extension_reload_rejected",
+      requestId: state.pendingExtensionReload.requestId,
+      errorCode: "lease_expired",
+    }]),
+  ]);
 }
 
 /**

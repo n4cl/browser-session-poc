@@ -89,6 +89,13 @@ test("pairing CLI parses snapshot with an explicit safe tab id", () => {
   }
 });
 
+test("pairing CLI accepts only the fixed Extension worker reload command", () => {
+  assert.deepEqual(parseInteractiveCommand("reload-extension-worker"), { type: "reload-extension-worker" });
+  for (const command of ["reload-extension-worker extra", "reload-extension-worker ", "reload-extension-worker\t"]) {
+    assert.equal(parseInteractiveCommand(command), null);
+  }
+});
+
 test("pairing CLI parses click with an explicit snapshot target", () => {
   assert.deepEqual(parseInteractiveCommand("click 7 loader-a 42"), {
     type: "click",
@@ -469,6 +476,57 @@ test("pairing CLI displays only the fixed session-local audit error", async () =
   assert.equal(exitCode, 0);
   assert.equal(output.value(), "ready poc-a ISSUED\nnavigate failed audit_unavailable\n");
   assert.equal(output.value().includes("raw audit path"), false);
+});
+
+test("pairing CLI dispatches Extension worker reload without audit or secret output", async () => {
+  const output = writableCapture();
+  const calls = [];
+  let invocation = 0;
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["reload-extension-worker", "reload-extension-worker extra", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    createRequestId: () => `reload-request-${++invocation}`,
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestExtensionReload(options) {
+          calls.push(options);
+          return { recovered: true };
+        },
+      },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.deepEqual(calls, [{ requestId: "reload-request-1", timeoutMs: 5_000 }]);
+  assert.equal(output.value(), "ready poc-a ISSUED\nextension reload recovered\nerror unknown_command\n");
+  assert.doesNotMatch(output.value(), /reload-request-1|session-a|browser-a/);
+});
+
+test("pairing CLI displays only fixed Extension reload failure codes", async () => {
+  const output = writableCapture();
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["reload-extension-worker", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    startHarness: async () => ({
+      server: {
+        state: { phase: "ACTIVE" },
+        async requestExtensionReload() {
+          throw Object.assign(new Error("raw native path"), { code: "reload_timeout" });
+        },
+      },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(output.value(), "ready poc-a ISSUED\nextension reload failed reload_timeout\n");
+  assert.doesNotMatch(output.value(), /raw native path/);
 });
 
 test("pairing CLI disconnects only an active Host without printing its identity", async () => {

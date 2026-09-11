@@ -15,11 +15,13 @@ import {
 } from "../core/browser-command-protocol.mjs";
 import { AUDIT_ERROR_CODE } from "../core/pairing-audit-log.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
+import { EXTENSION_RELOAD_TIMEOUT_DEFAULT_MS } from "../core/pairing-socket-server.mjs";
 
 const DEFAULT_PAIRING_LEASE_MINUTES = 60;
 const MAX_PAIRING_LEASE_MINUTES = 1_440;
 const LEASE_MINUTES_PATTERN = /^[1-9]\d*$/;
 const SESSION_DISPLAY_ERROR_CODES = new Set([...BROWSER_ERROR_CODES, AUDIT_ERROR_CODE]);
+const EXTENSION_RELOAD_DISPLAY_ERROR_CODES = new Set(["reload_timeout", "reload_busy", "transport_closed", "lease_expired"]);
 
 function displayErrorCode(error) {
   return SESSION_DISPLAY_ERROR_CODES.has(error?.code) ? ` ${error.code}` : "";
@@ -27,6 +29,10 @@ function displayErrorCode(error) {
 
 function displayAuditError(error) {
   return error?.code === AUDIT_ERROR_CODE ? ` ${AUDIT_ERROR_CODE}` : "";
+}
+
+function displayExtensionReloadError(error) {
+  return EXTENSION_RELOAD_DISPLAY_ERROR_CODES.has(error?.code) ? ` ${error.code}` : "";
 }
 
 export function parsePairingCommand(argumentsList) {
@@ -54,7 +60,7 @@ export function parsePairingCommand(argumentsList) {
 
 export function parseInteractiveCommand(line) {
   if (line === "status" || line === "ping" || line === "browser-status" || line === "tabs-list" ||
-    line === "disconnect-active-host" || line === "quit") {
+    line === "disconnect-active-host" || line === "reload-extension-worker" || line === "quit") {
     return { type: line };
   }
   const typeMatch = typeof line === "string"
@@ -173,6 +179,16 @@ export async function runPairingSession({
           output.write(`${JSON.stringify({ command: "tabs_list", generation: result.generation, tabs: result.tabs })}\n`);
         } catch (error) {
           output.write(`tabs-list failed${displayAuditError(error)}\n`);
+        }
+      } else if (interactive?.type === "reload-extension-worker") {
+        try {
+          await harness.server.requestExtensionReload({
+            requestId: createRequestId(),
+            timeoutMs: EXTENSION_RELOAD_TIMEOUT_DEFAULT_MS,
+          });
+          output.write("extension reload recovered\n");
+        } catch (error) {
+          output.write(`extension reload failed${displayExtensionReloadError(error)}\n`);
         }
       } else if (interactive?.type === "navigate") {
         try {

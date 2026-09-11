@@ -224,10 +224,22 @@ function assertPing(message, descriptor, hostConnectionId, type) {
   assertIdentity(message, descriptor, hostConnectionId);
 }
 
+export function assertExtensionReloadRequest(message, descriptor, hostConnectionId) {
+  assertExactFields(message, ["type", "request_id", "protocol_version", ...PAIRING_IDENTITY_FIELDS, "host_connection_id"]);
+  if (message.type !== "extension_reload_request" || !isNonEmptyString(message.request_id) || message.request_id.length > 128) {
+    throw new Error("invalid Extension reload request");
+  }
+  assertIdentity(message, descriptor, hostConnectionId);
+  return { command: "extension_reload", requestId: message.request_id };
+}
+
 function assertExtensionRequest(message, descriptor, hostConnectionId) {
   if (message?.type === "ping_request") {
     assertPing(message, descriptor, hostConnectionId, "ping_request");
     return { command: "ping", requestId: message.request_id };
+  }
+  if (message?.type === "extension_reload_request") {
+    return assertExtensionReloadRequest(message, descriptor, hostConnectionId);
   }
   return validateBrowserCommandRequest(message, { binding: descriptor, connectionId: hostConnectionId });
 }
@@ -475,7 +487,9 @@ export async function runPairingNativeHost({
                 const pending = assertExtensionRequest(request, descriptor, hostConnectionId);
                 pumpReason = "transport";
                 nativeWrite(output, request);
-                pendingRequests.set(pending.requestId, pending);
+                if (pending.command !== "extension_reload") {
+                  pendingRequests.set(pending.requestId, pending);
+                }
               }
             } catch {
               asynchronousFailure = { stage: pumpStage, reason: pumpReason };

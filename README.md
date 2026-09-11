@@ -58,6 +58,8 @@ ExtensionはGate 2 protocolで初回pairingと同一bindingのresumeを行う。
 
 前景harnessの標準入力で`disconnect-active-host`を送ると、そのinstanceのACTIVE Native Host transportだけを切断する。descriptor、listening socket、他instanceには作用せず、Extensionは同じbindingでresumeできる。このコマンドはA/B分離と再接続を検証するためのPoC用fault injectionであり、本番APIではない。ACTIVE接続がなければ拒否される。
 
+前景harnessの`reload-extension-worker`は、ACTIVE接続へ一度だけ送るExtension専用fault injectionである。通常のbrowser commandやauditには含めず、Extension側で固定identityを検証して`chrome.runtime.reload()`を呼ぶ。応答は返さず、最大5秒で新しいNative Host connectionのresume・pairing・ACTIVE復旧だけを待つため、自動再送は行わない。復旧成功時は`extension reload recovered`、失敗時は固定メッセージと固定error codeだけを表示する。ACTIVE接続がない、同時実行中、lease失効、transport切断では実行しない。
+
 browser command（`ping`を除くGate 3操作）の監査はinstance/generation専用の`.runtime/instances/<instance>/audit-<generation>.jsonl`へ行う。新規の0600 regular fileだけを作成し、親directoryは0700、symlink/hardlink・属性変更・既存fileは拒否する。各commandはdispatch前に`issued`、完了後に`success`または固定error codeを記録し、監査書込み失敗時はdispatchせず`audit_unavailable`、mutation完了後なら`outcome_unknown`として自動retryしない。timeout計測は`issued`監査成功後のdispatch直前から開始し、未dispatchのままcloseされたmutationは`transport_closed`として扱う。イベントにはsession/browser/profile/generation/request/command/outcome/timestampだけを含め、lease、nonce、connection、URL、title、text、cookie、localStorage、raw error、path、PIDは記録しない。`ping`は監査対象外である。
 
 PoC harnessの既定leaseは1時間である。満了時はACTIVE状態でもREVOKEDになり、長期session向けのrenewalは未実装である。

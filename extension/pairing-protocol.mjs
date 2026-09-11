@@ -99,6 +99,16 @@ function validateConnectionId(value) {
   if (!nonEmptyString(value)) fail();
 }
 
+export function validateExtensionReloadRequest(message, binding, hostConnectionId) {
+  exactFields(message, ["type", "request_id", "protocol_version", ...BINDING_FIELDS, "host_connection_id"]);
+  if (message.type !== "extension_reload_request" || !nonEmptyString(message.request_id) || message.request_id.length > 128) fail();
+  validateBinding(binding);
+  validateIdentity(message, binding);
+  validateConnectionId(message.host_connection_id);
+  if (message.host_connection_id !== hostConnectionId) fail();
+  return { requestId: message.request_id };
+}
+
 function validateNavigateTarget({ tabId, url }) {
   if (!Number.isSafeInteger(tabId) || tabId < 0 || typeof url !== "string" || url.length === 0 ||
     url.length > NAVIGATE_URL_MAX_LENGTH || url.trim() !== url || /[\u0000-\u001F\u007F]/.test(url) || /\s/u.test(url)) fail();

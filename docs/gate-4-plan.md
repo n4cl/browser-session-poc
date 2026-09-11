@@ -32,7 +32,7 @@ A/Bはそれぞれ専用のuser-data-dir、profile metadata、descriptor、sessi
 | --- | --- | --- | --- | --- |
 | 1 | session harness | Aの対話sessionを`quit`し、Aだけ新しいsession harnessを起動する。これは将来のMCP process lifecycleの代替試験とする。 | `ping`・read commandを継続成功 | 旧接続は受理せず、新session/new generationでpairingして`ACTIVE`へ復旧 |
 | 2 | Native Host transport | Aのharnessで既存の`disconnect-active-host`を一度だけ実行する。 | `ping`・read commandを継続成功 | 同じbindingのresumeで`ACTIVE`へ復旧。自動retryでmutationを再送しない |
-| 3 | Extension service worker | paired sessionから固定引数なしのExtension専用fault-injection commandを一度だけ送る。`chrome.runtime.reload()`を呼び、応答不能を前提にする。 | `ping`・read commandを継続成功 | service worker再起動後に自動rebind/resumeで`ACTIVE`へ復旧 |
+| 3 | Extension service worker | paired sessionの`reload-extension-worker`を一度だけ送る。通常browser command・auditには入れず、`chrome.runtime.reload()`を呼び、応答不能を前提にする。 | `ping`・read commandを継続成功 | service worker再起動後に新しいHost connectionで自動rebind/resumeし`ACTIVE`へ復旧 |
 | 4 | AのChrome process | Aを所有identity照合済みの`chrome stop`で停止し、同じprofileで`chrome start`する。 | `ping`・read commandを継続成功 | cookie/localStorageを保持したまま再pairingし、`ACTIVE`へ復旧 |
 
 各段階で停止対象以外のA/B資源をkill・reload・resetしない。Chrome停止前に対象profile、owner UID、process identityを照合し、不一致なら停止せず中断する。復旧に失敗した場合は次の層へ進まず、runtimeを回収して原因を記録する。

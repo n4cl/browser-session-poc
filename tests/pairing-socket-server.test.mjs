@@ -313,6 +313,60 @@ test("snapshot uses a five-second default timeout distinct from generic browser 
   await assert.doesNotReject(snapshot);
 });
 
+test("Extension reload waits for a new active Host connection and never sends a response retry", async (t) => {
+  const fixture = await serverFixture("poc-a", "111111111113");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const reload = fixture.server.requestExtensionReload({ requestId: "reload-1" });
+  assert.deepEqual(await client.next(), message(fixture.descriptor, "extension_reload_request", "connection-a", {
+    request_id: "reload-1",
+  }));
+  assert.throws(
+    () => fixture.server.requestExtensionReload({ requestId: "reload-2" }),
+    (error) => error.code === "reload_busy",
+  );
+
+  const oldClosed = once(client.socket, "close");
+  client.socket.destroy();
+  await oldClosed;
+
+  const resumed = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => resumed.socket.destroy());
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "resume", "connection-b")));
+  assert.equal((await resumed.next()).pairing_mode, "resume");
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "pair_ack", "connection-b")));
+  assert.equal((await resumed.next()).type, "pair_active");
+  assert.deepEqual(await reload, { recovered: true });
+
+  const ping = fixture.server.requestPing({ requestId: "after-reload", timeoutMs: 1_000 });
+  assert.equal((await resumed.next()).type, "ping_request");
+  resumed.send(encodeNativeMessage(message(fixture.descriptor, "ping_response", "connection-b", {
+    request_id: "after-reload",
+  })));
+  await ping;
+});
+
+test("Extension reload timeout is fixed, bounded, and does not retry", async (t) => {
+  const fixture = await serverFixture("poc-a", "111111111114");
+  t.after(() => fixture.server.close());
+  await fixture.server.listen();
+  const client = await framedClient(fixture.descriptor.socket_path);
+  t.after(() => client.socket.destroy());
+  await activateHostToSessionSocket(client, fixture.descriptor);
+
+  const reload = fixture.server.requestExtensionReload({ requestId: "reload-timeout", timeoutMs: 5 });
+  assert.equal((await client.next()).type, "extension_reload_request");
+  await assert.rejects(reload, (error) => error.code === "reload_timeout");
+  assert.throws(
+    () => fixture.server.requestExtensionReload({ requestId: "reload-timeout" }),
+    (error) => error.code === "reload_busy",
+  );
+});
+
 test("invalid JSON and oversized frames are rejected without changing an issued session", async (t) => {
   const fixture = await serverFixture("poc-a", "222222222222");
   t.after(() => fixture.server.close());
@@ -511,6 +565,46 @@ test("concurrent A and B navigate requests remain on their descriptor-selected s
   assert.equal(bTypeResult.browser_instance_id, b.descriptor.browser_instance_id);
   assert.equal(Object.hasOwn(aTypeResult, "text"), false);
   assert.equal(Object.hasOwn(bTypeResult, "text"), false);
+});
+
+test("A Extension reload waiter and reconnect stay isolated from B", async (t) => {
+  const a = await serverFixture("poc-a", "636363636363");
+  const b = await serverFixture("poc-b", "646464646464");
+  t.after(() => Promise.all([a.server.close(), b.server.close()]));
+  await Promise.all([a.server.listen(), b.server.listen()]);
+  const aClient = await framedClient(a.descriptor.socket_path);
+  const bClient = await framedClient(b.descriptor.socket_path);
+  t.after(() => aClient.socket.destroy());
+  t.after(() => bClient.socket.destroy());
+  await Promise.all([
+    activateHostToSessionSocket(aClient, a.descriptor),
+    activateHostToSessionSocket(bClient, b.descriptor),
+  ]);
+
+  const aReload = a.server.requestExtensionReload({ requestId: "reload-a" });
+  assert.deepEqual(await aClient.next(), message(a.descriptor, "extension_reload_request", "connection-a", {
+    request_id: "reload-a",
+  }));
+  const bPing = b.server.requestPing({ requestId: "ping-b", timeoutMs: 1_000 });
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "ping_request", "connection-a", { request_id: "ping-b" }));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "ping_response", "connection-a", { request_id: "ping-b" })));
+  await bPing;
+
+  const oldClosed = once(aClient.socket, "close");
+  aClient.socket.destroy();
+  await oldClosed;
+  const aResumed = await framedClient(a.descriptor.socket_path);
+  t.after(() => aResumed.socket.destroy());
+  aResumed.send(encodeNativeMessage(message(a.descriptor, "resume", "connection-b")));
+  assert.equal((await aResumed.next()).pairing_mode, "resume");
+  aResumed.send(encodeNativeMessage(message(a.descriptor, "pair_ack", "connection-b")));
+  assert.equal((await aResumed.next()).type, "pair_active");
+  await aReload;
+
+  const bSecondPing = b.server.requestPing({ requestId: "ping-b-2", timeoutMs: 1_000 });
+  assert.deepEqual(await bClient.next(), message(b.descriptor, "ping_request", "connection-a", { request_id: "ping-b-2" }));
+  bClient.send(encodeNativeMessage(message(b.descriptor, "ping_response", "connection-a", { request_id: "ping-b-2" })));
+  await bSecondPing;
 });
 
 test("disconnecting A's active host fences its pending ping without affecting B", async (t) => {

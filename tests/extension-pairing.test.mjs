@@ -6,6 +6,7 @@ import {
   validateRebindRequired,
   validatePairActive,
   validatePairChallenge,
+  validateExtensionReloadRequest,
 } from "../extension/pairing-protocol.mjs";
 import { createPairingController } from "../extension/background.mjs";
 
@@ -51,19 +52,25 @@ function fakePort() {
   };
 }
 
-function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined, storageSet = undefined, storageRemove = undefined } = {}) {
+function fakeChrome({ storedBinding = undefined, ports = [], tabs = undefined, tabGet = undefined, tabUpdate = undefined, storageSet = undefined, storageRemove = undefined, runtimeReload = undefined } = {}) {
   const storage = storedBinding === undefined ? {} : { pairing_binding: storedBinding };
   const setCalls = [];
   const removeCalls = [];
   const connectedNames = [];
+  const reloadCalls = [];
   return {
     storage,
     setCalls,
     removeCalls,
     connectedNames,
+    reloadCalls,
     api: {
       runtime: {
         lastError: undefined,
+        reload() {
+          reloadCalls.push(true);
+          if (runtimeReload) return runtimeReload();
+        },
         connectNative(name) {
           connectedNames.push(name);
           const port = ports.shift();
@@ -124,6 +131,96 @@ test("pure Extension protocol creates initial/resume starts and accepts pair_act
   assert.equal(validateRebindRequired({ type: "rebind_required", protocol_version: 1 }), true);
   assert.throws(() => validateRebindRequired({ type: "rebind_required", protocol_version: 2 }));
   assert.throws(() => validateRebindRequired({ type: "rebind_required", protocol_version: 1, detail: "secret" }));
+  assert.deepEqual(validateExtensionReloadRequest({ type: "extension_reload_request", request_id: "reload-1", ...identity() }, binding, "connection-a"), {
+    requestId: "reload-1",
+  });
+  assert.throws(() => validateExtensionReloadRequest({ type: "extension_reload_request", request_id: "reload-1", ...identity(), extra: true }, binding, "connection-a"));
+  assert.throws(() => validateExtensionReloadRequest({ type: "extension_reload_request", request_id: "reload-1", ...identity("other") }, binding, "connection-a"));
+});
+
+test("active Extension reload validates exactly, calls runtime.reload once, and sends no response", async () => {
+  const port = fakePort();
+  const chrome = fakeChrome({ ports: [port] });
+  const controller = createPairingController({ chromeApi: chrome.api, setTimer: () => ({}) });
+  await controller.connect();
+  port.emitMessage(challenge());
+  await settle();
+  port.emitMessage(active());
+  await settle();
+  const messageCount = port.messages.length;
+  port.emitMessage({ type: "extension_reload_request", request_id: "reload-1", ...identity() });
+  await settle();
+  assert.deepEqual(chrome.reloadCalls, [true]);
+  assert.equal(port.messages.length, messageCount);
+  assert.equal(port.disconnected, false);
+});
+
+test("Extension reload validation and runtime failures disconnect with fixed diagnostics", async () => {
+  const invalidPort = fakePort();
+  const invalidErrors = [];
+  const invalidChrome = fakeChrome({ ports: [invalidPort] });
+  const invalidController = createPairingController({
+    chromeApi: invalidChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { invalidErrors.push(args); },
+  });
+  await invalidController.connect();
+  invalidPort.emitMessage(challenge());
+  await settle();
+  invalidPort.emitMessage(active());
+  await settle();
+  invalidPort.emitMessage({ type: "extension_reload_request", request_id: "secret-reload", ...identity("other") });
+  await settle();
+  assert.deepEqual(invalidErrors, [["Native Messaging pairing protocol failure", {
+    stage: "active_extension_reload",
+    reason: "validation",
+  }]]);
+  assert.equal(invalidPort.disconnected, true);
+  assert.equal(invalidChrome.reloadCalls.length, 0);
+
+  const unavailablePort = fakePort();
+  const unavailableErrors = [];
+  const unavailableChrome = fakeChrome({ ports: [unavailablePort] });
+  delete unavailableChrome.api.runtime.reload;
+  const unavailableController = createPairingController({
+    chromeApi: unavailableChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { unavailableErrors.push(args); },
+  });
+  await unavailableController.connect();
+  unavailablePort.emitMessage(challenge());
+  await settle();
+  unavailablePort.emitMessage(active());
+  await settle();
+  unavailablePort.emitMessage({ type: "extension_reload_request", request_id: "reload-unavailable", ...identity() });
+  await settle();
+  assert.deepEqual(unavailableErrors, [["Native Messaging pairing protocol failure", {
+    stage: "active_extension_reload",
+    reason: "chrome_api",
+  }]]);
+  assert.equal(unavailablePort.disconnected, true);
+
+  const throwingPort = fakePort();
+  const throwingErrors = [];
+  const throwingChrome = fakeChrome({ ports: [throwingPort], runtimeReload() { throw new Error("raw reload secret"); } });
+  const throwingController = createPairingController({
+    chromeApi: throwingChrome.api,
+    setTimer: () => ({}),
+    reportError(...args) { throwingErrors.push(args); },
+  });
+  await throwingController.connect();
+  throwingPort.emitMessage(challenge());
+  await settle();
+  throwingPort.emitMessage(active());
+  await settle();
+  throwingPort.emitMessage({ type: "extension_reload_request", request_id: "reload-throw", ...identity() });
+  await settle();
+  assert.deepEqual(throwingErrors, [["Native Messaging pairing protocol failure", {
+    stage: "active_extension_reload",
+    reason: "chrome_api",
+  }]]);
+  assert.equal(throwingPort.disconnected, true);
+  assert.doesNotMatch(JSON.stringify(throwingErrors), /raw reload secret|reload-throw|session-a/);
 });
 
 test("initial pairing does not persist before pair_active and persists only the confirmed binding", async () => {

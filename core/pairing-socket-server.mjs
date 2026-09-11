@@ -8,6 +8,8 @@ import {
   expirePairingState,
   issuePairingPing,
   cancelPairingPing,
+  issueExtensionReload,
+  cancelExtensionReload,
   issueBrowserCommand,
   cancelBrowserCommand,
   reducePairingMessage,
@@ -20,6 +22,9 @@ import {
 import { AUDIT_ERROR_CODE } from "./pairing-audit-log.mjs";
 
 export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
+
+export const EXTENSION_RELOAD_TIMEOUT_DEFAULT_MS = 5_000;
+export const EXTENSION_RELOAD_TIMEOUT_MAX_MS = 5_000;
 
 function modeOf(stat) {
   return stat.mode & 0o777;
@@ -83,6 +88,7 @@ export class PairingSocketServer {
   #expiryTimer = null;
   #pendingPings = new Map();
   #pendingBrowserCommands = new Map();
+  #pendingExtensionReloads = new Map();
   #auditLogger;
   #auditTasks = new Set();
 
@@ -192,6 +198,47 @@ export class PairingSocketServer {
       target: { tabId, loaderId, backendDomNodeId, text },
       timeoutMs,
     });
+  }
+
+  /** Sends one operator-only service-worker reload request; it is not a browser command or audit event. */
+  requestExtensionReload({ requestId, timeoutMs = EXTENSION_RELOAD_TIMEOUT_DEFAULT_MS }) {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > EXTENSION_RELOAD_TIMEOUT_MAX_MS) {
+      throw new TypeError("extension reload timeout must be between 1 and 5000 ms");
+    }
+    this.#expireIfDue();
+    if (this.#pendingExtensionReloads.size > 0 || this.#state.pendingExtensionReload !== null) {
+      const error = new Error("reload_busy");
+      error.code = "reload_busy";
+      throw error;
+    }
+    if (this.#state.phase !== "ACTIVE" || !this.#state.activeConnectionId) {
+      const error = new Error("transport_closed");
+      error.code = "transport_closed";
+      throw error;
+    }
+    let transition;
+    try {
+      transition = issueExtensionReload(this.#state, { requestId });
+    } catch {
+      const error = new Error("reload_busy");
+      error.code = "reload_busy";
+      throw error;
+    }
+    this.#state = transition.state;
+    const result = new Promise((resolve, reject) => {
+      const timer = this.#setTimer(() => {
+        const pending = this.#pendingExtensionReloads.get(requestId);
+        if (!pending) return;
+        pending.timer = null;
+        const cancelled = cancelExtensionReload(this.#state, requestId, "reload_timeout");
+        this.#state = cancelled.state;
+        this.#applyEffects(cancelled.effects);
+      }, timeoutMs);
+      this.#pendingExtensionReloads.set(requestId, { resolve, reject, timer });
+    });
+    // The waiter is registered before any bytes are written to the active Host.
+    this.#applyEffects(transition.effects);
+    return result;
   }
 
   /**
@@ -361,6 +408,20 @@ export class PairingSocketServer {
     }
   }
 
+  #settleExtensionReload(requestId, effect) {
+    const pending = this.#pendingExtensionReloads.get(requestId);
+    if (!pending) return;
+    this.#pendingExtensionReloads.delete(requestId);
+    this.#clearTimer(pending.timer);
+    if (effect.type === "extension_reload_resolved") {
+      pending.resolve({ recovered: true });
+      return;
+    }
+    const error = new Error(effect.errorCode);
+    error.code = effect.errorCode;
+    pending.reject(error);
+  }
+
   #rejectBeforeBrowserDispatch(requestId) {
     const pending = this.#pendingBrowserCommands.get(requestId);
     if (!pending) return;
@@ -435,6 +496,10 @@ export class PairingSocketServer {
       }
       if (effect.type === "browser_resolved" || effect.type === "browser_rejected") {
         this.#settleBrowserCommand(effect.requestId, effect);
+        continue;
+      }
+      if (effect.type === "extension_reload_resolved" || effect.type === "extension_reload_rejected") {
+        this.#settleExtensionReload(effect.requestId, effect);
         continue;
       }
       const connection = this.#connections.get(effect.connectionId);
@@ -524,6 +589,11 @@ export class PairingSocketServer {
         requestId,
         response: { errorCode },
       });
+    }
+    for (const requestId of [...this.#pendingExtensionReloads.keys()]) {
+      const cancelled = cancelExtensionReload(this.#state, requestId, "transport_closed");
+      this.#state = cancelled.state;
+      this.#applyEffects(cancelled.effects);
     }
     while (this.#auditTasks.size > 0) {
       await Promise.allSettled([...this.#auditTasks]);

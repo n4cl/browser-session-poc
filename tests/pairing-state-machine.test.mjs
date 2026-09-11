@@ -7,6 +7,8 @@ import {
   disconnectPairingConnection,
   expirePairingState,
   issuePairingPing,
+  issueExtensionReload,
+  cancelExtensionReload,
   issueBrowserCommand,
   cancelBrowserCommand,
   reducePairingMessage,
@@ -145,6 +147,53 @@ test("issued pairing pings resolve only for the active identity and pending requ
   const resolved = reducePairingMessage(issued.state, { ...issued.effects[0].message, type: "ping_response" });
   assert.deepEqual(resolved.state.pendingRequestIds, []);
   assert.deepEqual(resolved.effects, [{ type: "ping_resolved", requestId: "request-ping" }]);
+});
+
+test("Extension reload is sent once and resolves only after a different resumed connection is active", () => {
+  const issued = issueExtensionReload(activeState(), { requestId: "reload-1" });
+  assert.deepEqual(issued.effects, [{
+    type: "send",
+    connectionId: "connection-a",
+    message: {
+      type: "extension_reload_request",
+      request_id: "reload-1",
+      ...identity("connection-a"),
+    },
+  }]);
+  assert.equal(issued.state.pendingExtensionReload.connectionId, "connection-a");
+  assert.throws(() => issueExtensionReload(issued.state, { requestId: "reload-2" }), PairingProtocolError);
+
+  const candidate = reducePairingMessage(issued.state, resume());
+  assert.equal(candidate.state.activeConnectionId, "connection-a");
+  assert.equal(candidate.state.pendingExtensionReload.requestId, "reload-1");
+  const resumed = reducePairingMessage(candidate.state, ack("connection-b"));
+  assert.equal(resumed.state.activeConnectionId, "connection-b");
+  assert.equal(resumed.state.pendingExtensionReload, null);
+  assert.deepEqual(resumed.effects.at(-1), { type: "extension_reload_resolved", requestId: "reload-1" });
+});
+
+test("Extension reload cancellation is a fixed failure and prevents request reuse", () => {
+  const issued = issueExtensionReload(activeState(), { requestId: "reload-timeout" });
+  const cancelled = cancelExtensionReload(issued.state, "reload-timeout", "reload_timeout");
+  assert.deepEqual(cancelled.effects, [{
+    type: "extension_reload_rejected",
+    requestId: "reload-timeout",
+    errorCode: "reload_timeout",
+  }]);
+  assert.equal(cancelled.state.pendingExtensionReload, null);
+  assert.throws(() => issueExtensionReload(cancelled.state, { requestId: "reload-timeout" }), PairingProtocolError);
+});
+
+test("Extension reload lease expiry rejects the waiter without any retry effect", () => {
+  const issued = issueExtensionReload(activeState(), { requestId: "reload-lease" });
+  const expired = expirePairingState(issued.state, new Date(descriptor.expires_at));
+  assert.equal(expired.state.phase, PAIRING_STATES.REVOKED);
+  assert.equal(expired.state.pendingExtensionReload, null);
+  assert.deepEqual(expired.effects.at(-1), {
+    type: "extension_reload_rejected",
+    requestId: "reload-lease",
+    errorCode: "lease_expired",
+  });
 });
 
 test("browser commands preserve identity, correlate responses, and reject timeout without retry", () => {

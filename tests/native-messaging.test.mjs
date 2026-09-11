@@ -27,6 +27,7 @@ import {
   NATIVE_HOST_FAILURE_REASONS,
   NATIVE_HOST_FAILURE_SCHEMA_VERSION,
   NATIVE_HOST_FAILURE_STAGES,
+  assertExtensionReloadRequest,
   parseNativeHostArguments,
   connectPairingSocket,
   runNativeHost,
@@ -151,7 +152,7 @@ function bridgeFor(challenge) {
 test("manifest public key derives the fixed unpacked extension ID", async () => {
   const manifest = JSON.parse(await readFile(path.join(repositoryRoot, "extension", "manifest.json"), "utf8"));
   assert.equal(extensionIdFromPublicKey(manifest.key), GATE_1_EXTENSION_ID);
-  assert.equal(manifest.version, "0.0.4");
+  assert.equal(manifest.version, "0.0.5");
   assert.deepEqual(manifest.permissions, ["nativeMessaging", "storage", "tabs", "debugger"]);
   assert.equal(manifest.permissions.includes("debugger"), true);
   assert.equal(manifest.host_permissions, undefined);
@@ -681,6 +682,74 @@ test("pairing Native Host reaches the descriptor-selected session socket without
   input.end(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-integration") }));
   assert.equal(await run, true);
   assert.equal(stderr.read(), null);
+});
+
+test("Native Host accepts only the exact Extension reload request schema", async () => {
+  const fixture = await pairingFixture();
+  const identity = pairingIdentity(fixture.descriptor, "connection-reload");
+  assert.deepEqual(assertExtensionReloadRequest({
+    type: "extension_reload_request",
+    request_id: "reload-1",
+    ...identity,
+  }, fixture.descriptor, "connection-reload"), { command: "extension_reload", requestId: "reload-1" });
+  assert.throws(() => assertExtensionReloadRequest({
+    type: "extension_reload_request",
+    request_id: "reload-1",
+    ...identity,
+    extra: "secret",
+  }, fixture.descriptor, "connection-reload"));
+});
+
+test("pairing Native Host forwards Extension reload once without waiting for a response", async (t) => {
+  const fixture = await pairingFixture();
+  const server = new PairingSocketServer({
+    paths: fixture.paths,
+    descriptor: fixture.descriptor,
+    profileInstanceId: fixture.metadata.profile_instance_id,
+    now: PAIRING_NOW,
+  });
+  t.after(() => server.close());
+  await server.listen();
+
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const stderr = new PassThrough();
+  const outputQueue = nativeOutputQueue(output);
+  let settled = false;
+  const run = runPairingNativeHost({
+    input,
+    output,
+    stderr,
+    origin: GATE_1_EXTENSION_ORIGIN,
+    runtimeRoot: fixture.runtimeRoot,
+    instanceId: "poc-a",
+    createUuid: () => "connection-reload",
+    now: PAIRING_NOW,
+  });
+  run.then(() => { settled = true; });
+
+  input.write(encodeNativeMessage({ type: "pair_start", protocol_version: 1 }));
+  assert.equal((await outputQueue.next()).type, "pair_challenge");
+  input.write(encodeNativeMessage({ type: "pair_ack", ...pairingIdentity(fixture.descriptor, "connection-reload") }));
+  assert.equal((await outputQueue.next()).type, "pair_active");
+
+  const reload = server.requestExtensionReload({ requestId: "native-reload", timeoutMs: 1_000 });
+  assert.deepEqual(await outputQueue.next(), {
+    type: "extension_reload_request",
+    request_id: "native-reload",
+    ...pairingIdentity(fixture.descriptor, "connection-reload"),
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(stderr.read(), null);
+
+  // There is intentionally no Extension response; closing the simulated Host input
+  // represents service-worker reload and leaves the session waiter to be recovered by resume.
+  input.end();
+  assert.equal(await run, true);
+  const reloadRejected = assert.rejects(reload, (error) => error.code === "transport_closed");
+  await server.close();
+  await reloadRejected;
 });
 
 test("pairing Native Host forwards a valid snapshot response without exiting", async (t) => {
