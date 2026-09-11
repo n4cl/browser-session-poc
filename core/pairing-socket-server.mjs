@@ -17,6 +17,7 @@ import {
   assertBrowserCommandTimeout,
   SNAPSHOT_COMMAND_TIMEOUT_DEFAULT_MS,
 } from "./browser-command-protocol.mjs";
+import { AUDIT_ERROR_CODE } from "./pairing-audit-log.mjs";
 
 export { PAIRING_SOCKET_MAX_MESSAGE_BYTES } from "./pairing-protocol.mjs";
 
@@ -82,6 +83,8 @@ export class PairingSocketServer {
   #expiryTimer = null;
   #pendingPings = new Map();
   #pendingBrowserCommands = new Map();
+  #auditLogger;
+  #auditTasks = new Set();
 
   constructor({
     paths,
@@ -92,12 +95,16 @@ export class PairingSocketServer {
     clock = () => new Date(),
     setTimer = setTimeout,
     clearTimer = clearTimeout,
+    auditLogger = null,
   }) {
     if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes <= 0) {
       throw new TypeError("maxMessageBytes must be a positive safe integer");
     }
     if (typeof clock !== "function" || typeof setTimer !== "function" || typeof clearTimer !== "function") {
       throw new TypeError("clock and timer functions are required");
+    }
+    if (auditLogger !== null && (typeof auditLogger.write !== "function" || typeof auditLogger.close !== "function")) {
+      throw new TypeError("auditLogger must provide write and close functions");
     }
     validatePairingDescriptor(descriptor, { paths, profileInstanceId, now });
     this.#paths = paths;
@@ -107,6 +114,7 @@ export class PairingSocketServer {
     this.#clock = clock;
     this.#setTimer = setTimer;
     this.#clearTimer = clearTimer;
+    this.#auditLogger = auditLogger;
   }
 
   get state() {
@@ -135,15 +143,17 @@ export class PairingSocketServer {
     this.#expireIfDue();
     const transition = issueBrowserCommand(this.#state, { command, requestId, target });
     this.#state = transition.state;
-    return new Promise((resolve, reject) => {
+    const result = new Promise((resolve, reject) => {
       const timer = this.#setTimer(() => {
         const cancelled = cancelBrowserCommand(this.#state, requestId);
         this.#state = cancelled.state;
         this.#applyEffects(cancelled.effects);
       }, timeoutMs);
       this.#pendingBrowserCommands.set(requestId, { resolve, reject, timer, command });
-      this.#applyEffects(transition.effects);
     });
+    const dispatch = this.#dispatchBrowserCommand(transition.effects, requestId, command);
+    this.#trackAuditTask(dispatch);
+    return result;
   }
 
   requestBrowserStatus({ requestId, timeoutMs = 1_000 }) {
@@ -293,6 +303,100 @@ export class PairingSocketServer {
     this.#applyEffects(effects);
   }
 
+  #auditEvent(requestId, command, outcome) {
+    if (this.#auditLogger === null) return Promise.resolve();
+    const timestamp = this.#clock();
+    if (!(timestamp instanceof Date) || !Number.isFinite(timestamp.valueOf())) {
+      return Promise.reject(new Error(AUDIT_ERROR_CODE));
+    }
+    return this.#auditLogger.write({
+      session_id: this.#descriptor.session_id,
+      browser_instance_id: this.#descriptor.browser_instance_id,
+      profile_instance_id: this.#descriptor.profile_instance_id,
+      generation: this.#descriptor.generation,
+      request_id: requestId,
+      command,
+      outcome,
+      timestamp: timestamp.toISOString(),
+    });
+  }
+
+  #trackAuditTask(task) {
+    const tracked = Promise.resolve(task).catch(() => {});
+    this.#auditTasks.add(tracked);
+    void tracked.finally(() => this.#auditTasks.delete(tracked)).catch(() => {});
+  }
+
+  async #dispatchBrowserCommand(effects, requestId, command) {
+    if (this.#auditLogger !== null) {
+      try {
+        await this.#auditEvent(requestId, command, "issued");
+      } catch {
+        this.#rejectBeforeBrowserDispatch(requestId);
+        return;
+      }
+    }
+    if (this.#pendingBrowserCommands.has(requestId)) this.#applyEffects(effects);
+  }
+
+  #rejectBeforeBrowserDispatch(requestId) {
+    const pending = this.#pendingBrowserCommands.get(requestId);
+    if (!pending) return;
+    this.#pendingBrowserCommands.delete(requestId);
+    this.#clearTimer(pending.timer);
+    const cancelled = cancelBrowserCommand(this.#state, requestId);
+    this.#state = cancelled.state;
+    const error = new Error(AUDIT_ERROR_CODE);
+    error.code = AUDIT_ERROR_CODE;
+    pending.reject(error);
+  }
+
+  #settleBrowserCommand(requestId, effect) {
+    const pending = this.#pendingBrowserCommands.get(requestId);
+    if (!pending) return;
+    this.#pendingBrowserCommands.delete(requestId);
+    this.#clearTimer(pending.timer);
+    this.#trackAuditTask(this.#completeBrowserCommand(pending, effect));
+  }
+
+  async #completeBrowserCommand(pending, effect) {
+    const outcome = effect.type === "browser_resolved"
+      ? "success"
+      : effect.response?.errorCode ?? "transport_closed";
+    let auditFailed = false;
+    try {
+      await this.#auditEvent(pending.requestId, pending.command, outcome);
+    } catch {
+      auditFailed = true;
+    }
+    if (auditFailed) {
+      const error = new Error(["navigate", "click", "type"].includes(pending.command)
+        ? "outcome_unknown"
+        : AUDIT_ERROR_CODE);
+      error.code = ["navigate", "click", "type"].includes(pending.command)
+        ? "outcome_unknown"
+        : AUDIT_ERROR_CODE;
+      pending.reject(error);
+      return;
+    }
+    if (effect.type === "browser_resolved") {
+      pending.resolve({
+        request_id: effect.requestId,
+        command: pending.command,
+        session_id: this.#descriptor.session_id,
+        browser_instance_id: this.#descriptor.browser_instance_id,
+        profile_instance_id: this.#descriptor.profile_instance_id,
+        generation: this.#descriptor.generation,
+        lease_id: this.#descriptor.lease_id,
+        ...effect.response,
+      });
+    } else {
+      const error = new Error(`browser command failed: ${outcome}`);
+      error.code = outcome;
+      pending.reject(error);
+    }
+  }
+
   #applyEffects(effects) {
     for (const effect of effects) {
       if (effect.type === "ping_resolved" || effect.type === "ping_rejected") {
@@ -306,27 +410,7 @@ export class PairingSocketServer {
         continue;
       }
       if (effect.type === "browser_resolved" || effect.type === "browser_rejected") {
-        const pending = this.#pendingBrowserCommands.get(effect.requestId);
-        if (pending) {
-          this.#pendingBrowserCommands.delete(effect.requestId);
-          this.#clearTimer(pending.timer);
-          if (effect.type === "browser_resolved") {
-            pending.resolve({
-              request_id: effect.requestId,
-              command: pending.command,
-              session_id: this.#descriptor.session_id,
-              browser_instance_id: this.#descriptor.browser_instance_id,
-              profile_instance_id: this.#descriptor.profile_instance_id,
-              generation: this.#descriptor.generation,
-              lease_id: this.#descriptor.lease_id,
-              ...effect.response,
-            });
-          } else {
-            const error = new Error(`browser command failed: ${effect.response?.errorCode ?? "transport_closed"}`);
-            error.code = effect.response?.errorCode ?? "transport_closed";
-            pending.reject(error);
-          }
-        }
+        this.#settleBrowserCommand(effect.requestId, effect);
         continue;
       }
       const connection = this.#connections.get(effect.connectionId);
@@ -408,12 +492,15 @@ export class PairingSocketServer {
       pending.reject(new Error("pairing socket server closed"));
     }
     for (const [requestId, pending] of this.#pendingBrowserCommands) {
-      this.#pendingBrowserCommands.delete(requestId);
-      this.#clearTimer(pending.timer);
       const errorCode = ["navigate", "click", "type"].includes(pending.command) ? "outcome_unknown" : "transport_closed";
-      const error = new Error(`browser command failed: ${errorCode}`);
-      error.code = errorCode;
-      pending.reject(error);
+      this.#settleBrowserCommand(requestId, {
+        type: "browser_rejected",
+        requestId,
+        response: { errorCode },
+      });
+    }
+    while (this.#auditTasks.size > 0) {
+      await Promise.allSettled([...this.#auditTasks]);
     }
     for (const connection of this.#sockets) {
       connection.socket.destroy();

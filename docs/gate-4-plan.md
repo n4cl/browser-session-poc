@@ -61,9 +61,9 @@ G4-1でA/Bのmarkerを作成した後、Aだけを同じprofileでChrome stop/st
 
 実機では可能なfault-injection境界でAをdisconnect/rebindしたあと、保持していた旧connection相当の送信を一度だけ試し、Aが拒否され、Bが継続することを確認する。旧connectionの秘密値をログや試験記録へ出さない。実機で旧transportを安全に再利用できない場合は、同じ条件を自動transport testの合格証拠とし、実機項目を未実施として明記する。
 
-### G4-5: private audit JSONL（追加予定）
+### G4-5: private audit JSONL
 
-監査ログはGate 4の実装作業で追加する。推奨方式は、`browser_instance_id`と`generation`ごとに専用の0600 regular fileを持つserialized append writerである。親directoryは0700、runtime rootはGit管理外とし、instance/generationを跨いで同じファイルへ書かない。
+監査ログは`browser_instance_id`と`generation`ごとに専用の0600 regular fileへ書き込む。実装済みのserialized append writerは新規ファイルだけを受け入れ、親directoryは0700、runtime rootはGit管理外とし、instance/generationを跨いで同じファイルへ書かない。`ping`はbrowser command監査の対象外とする。
 
 1イベントの許可schemaは次だけとする。
 
@@ -104,7 +104,7 @@ writerはopen済みfdを保持してイベントを直列化し、flush/errorを
 3. G4-2を表の順に一段ずつ実行する。各段階でBの継続とAの復旧を記録し、失敗時はその段階で停止する。
 4. G4-3のA同一profile restartを実行し、保存状態とphaseを再確認する。
 5. G4-4の自動testを先に実行し、実機fault injectionは対象を完全照合してから一度だけ行う。
-6. audit実装後にG4-5を実行し、内容、mode、regular file、symlink/hardlink拒否、serialized write、closeを検証する。
+6. G4-5を実行し、内容、mode、regular file、symlink/hardlink拒否、serialized write、closeを検証する。
 7. localhost serverを停止し、sessionを`quit`し、A/Bの専用Chromeを所有確認後に停止する。descriptor、socket、claim、temporary fileを既存cleanupで回収し、別instanceのruntimeは触らない。
 
 復旧不能な場合は、まず対象instanceだけをREVOKEDにし、旧descriptor/socketを再利用しない。新generation・新leaseでpairingをやり直す。原因究明中はcookie、localStorage、text、URL、title、identity secret、raw exceptionを採取せず、固定stage/errorと非機密なpass/failだけを残す。

@@ -179,6 +179,18 @@ test("browser commands preserve identity, correlate responses, and reject timeou
     PairingProtocolError,
   );
 
+  const extensionAudit = issueBrowserCommand(activeState(), { command: "browser_status", requestId: "audit-unavailable-response" });
+  assert.throws(
+    () => reducePairingMessage(extensionAudit.state, {
+      type: "browser_error_response",
+      ...identity("connection-a"),
+      request_id: "audit-unavailable-response",
+      command: "browser_status",
+      error_code: "audit_unavailable",
+    }),
+    PairingProtocolError,
+  );
+
   const listed = issueBrowserCommand(activeState(), { command: "tabs_list", requestId: "tabs-list" });
   const listedResponse = reducePairingMessage(listed.state, {
     type: "tabs_list_response",

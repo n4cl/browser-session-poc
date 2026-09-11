@@ -452,6 +452,25 @@ test("pairing CLI reports browser command failures without exposing transport de
   assert.equal(output.value().includes("must-not-print"), false);
 });
 
+test("pairing CLI displays only the fixed session-local audit error", async () => {
+  const output = writableCapture();
+  const error = Object.assign(new Error("raw audit path must not print"), { code: "audit_unavailable" });
+  const exitCode = await runPairingSession({
+    argumentsList: ["start", "poc-a"],
+    runtimeRoot: "/private/tmp/runtime",
+    lineReader: commands(["navigate 7 https://example.test/", "quit"]),
+    output,
+    errorOutput: writableCapture(),
+    startHarness: async () => ({
+      server: { requestNavigate: async () => { throw error; } },
+      async close() {},
+    }),
+  });
+  assert.equal(exitCode, 0);
+  assert.equal(output.value(), "ready poc-a ISSUED\nnavigate failed audit_unavailable\n");
+  assert.equal(output.value().includes("raw audit path"), false);
+});
+
 test("pairing CLI disconnects only an active Host without printing its identity", async () => {
   const output = writableCapture();
   const errorOutput = writableCapture();

@@ -13,11 +13,21 @@ import {
   validateTypeTarget,
   validateNavigateTarget,
 } from "../core/browser-command-protocol.mjs";
+import { AUDIT_ERROR_CODE } from "../core/pairing-audit-log.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
 
 const DEFAULT_PAIRING_LEASE_MINUTES = 60;
 const MAX_PAIRING_LEASE_MINUTES = 1_440;
 const LEASE_MINUTES_PATTERN = /^[1-9]\d*$/;
+const SESSION_DISPLAY_ERROR_CODES = new Set([...BROWSER_ERROR_CODES, AUDIT_ERROR_CODE]);
+
+function displayErrorCode(error) {
+  return SESSION_DISPLAY_ERROR_CODES.has(error?.code) ? ` ${error.code}` : "";
+}
+
+function displayAuditError(error) {
+  return error?.code === AUDIT_ERROR_CODE ? ` ${AUDIT_ERROR_CODE}` : "";
+}
 
 export function parsePairingCommand(argumentsList) {
   const [command, instanceId, ...extra] = argumentsList;
@@ -154,15 +164,15 @@ export async function runPairingSession({
         try {
           const result = await harness.server.requestBrowserStatus({ requestId: createRequestId(), timeoutMs: 1_000 });
           output.write(`${JSON.stringify({ command: "browser_status", generation: result.generation, status: result.status })}\n`);
-        } catch {
-          output.write("browser-status failed\n");
+        } catch (error) {
+          output.write(`browser-status failed${displayAuditError(error)}\n`);
         }
       } else if (interactive?.type === "tabs-list") {
         try {
           const result = await harness.server.requestTabsList({ requestId: createRequestId(), timeoutMs: 1_000 });
           output.write(`${JSON.stringify({ command: "tabs_list", generation: result.generation, tabs: result.tabs })}\n`);
-        } catch {
-          output.write("tabs-list failed\n");
+        } catch (error) {
+          output.write(`tabs-list failed${displayAuditError(error)}\n`);
         }
       } else if (interactive?.type === "navigate") {
         try {
@@ -173,8 +183,8 @@ export async function runPairingSession({
             timeoutMs: 1_000,
           });
           output.write(`${JSON.stringify({ command: "navigate", generation: result.generation, tab_id: result.tab_id, accepted: result.accepted })}\n`);
-        } catch {
-          output.write("navigate failed\n");
+        } catch (error) {
+          output.write(`navigate failed${displayAuditError(error)}\n`);
         }
       } else if (interactive?.type === "snapshot") {
         try {
@@ -193,8 +203,7 @@ export async function runPairingSession({
             partial: result.partial,
           })}\n`);
         } catch (error) {
-          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
-          output.write(`snapshot failed${errorCode}\n`);
+          output.write(`snapshot failed${displayErrorCode(error)}\n`);
         }
       } else if (interactive?.type === "click") {
         try {
@@ -214,8 +223,7 @@ export async function runPairingSession({
             accepted: result.accepted,
           })}\n`);
         } catch (error) {
-          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
-          output.write(`click failed${errorCode}\n`);
+          output.write(`click failed${displayErrorCode(error)}\n`);
         }
       } else if (interactive?.type === "type") {
         try {
@@ -236,8 +244,7 @@ export async function runPairingSession({
             accepted: result.accepted,
           })}\n`);
         } catch (error) {
-          const errorCode = BROWSER_ERROR_CODES.includes(error?.code) ? ` ${error.code}` : "";
-          output.write(`type failed${errorCode}\n`);
+          output.write(`type failed${displayErrorCode(error)}\n`);
         }
       } else if (interactive?.type === "disconnect-active-host") {
         try {

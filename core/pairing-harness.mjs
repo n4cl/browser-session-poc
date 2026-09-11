@@ -17,6 +17,7 @@ import {
 import { PairingSocketServer } from "./pairing-socket-server.mjs";
 import { acquireOrRecoverPairingClaim, probePairingSocket } from "./pairing-claim.mjs";
 import { listProcessIdentities, readProcessIdentity } from "./chrome-instance.mjs";
+import { createPairingAuditLogger } from "./pairing-audit-log.mjs";
 
 function modeOf(info) { return info.mode & 0o777; }
 
@@ -78,9 +79,10 @@ async function ensureNativeHost(paths) {
   await readExpectedPrivateFile(paths.wrapperPath, nativeHostWrapperContent(paths), 0o700, "Native Host wrapper");
 }
 
-async function closeOwnedResources({ server, descriptorPath, descriptorOwnership, claimPath, claimOwnership }) {
+async function closeOwnedResources({ server, auditLogger, descriptorPath, descriptorOwnership, claimPath, claimOwnership }) {
   const errors = [];
   try { await server?.close(); } catch (error) { errors.push(error); }
+  try { await auditLogger?.close(); } catch (error) { errors.push(error); }
   for (const [filePath, ownership] of [[descriptorPath, descriptorOwnership], [claimPath, claimOwnership]]) {
     if (!ownership) continue;
     try { await removeOwnedFile(filePath, ownership); } catch (error) { errors.push(error); }
@@ -119,6 +121,7 @@ export async function startPairingHarness({
   });
   let descriptorOwnership;
   let server;
+  let auditLogger;
   try {
     const metadata = await loadOrCreateProfileMetadata(paths, { createUuid });
     const generation = (await readPrivateGeneration(generationPath)) + 1;
@@ -140,7 +143,14 @@ export async function startPairingHarness({
       leaseId: createUuid(),
       pairingNonce: createUuid(),
     });
-    server = new PairingSocketServer({ paths, descriptor, profileInstanceId: metadata.profile_instance_id, now: issuedAt });
+    auditLogger = await createPairingAuditLogger({ paths, generation });
+    server = new PairingSocketServer({
+      paths,
+      descriptor,
+      profileInstanceId: metadata.profile_instance_id,
+      now: issuedAt,
+      auditLogger,
+    });
     await server.listen();
     await writeActivePairingDescriptor(paths, descriptor, { profileInstanceId: metadata.profile_instance_id, now: issuedAt });
     descriptorOwnership = await recordOwnership(paths.activeDescriptorPath, `${JSON.stringify(descriptor)}\n`);
@@ -153,6 +163,7 @@ export async function startPairingHarness({
         if (!closing) {
           closing = closeOwnedResources({
             server,
+            auditLogger,
             descriptorPath: paths.activeDescriptorPath,
             descriptorOwnership,
             claimPath,
@@ -166,6 +177,7 @@ export async function startPairingHarness({
     try {
       await closeOwnedResources({
         server,
+        auditLogger,
         descriptorPath: paths.activeDescriptorPath,
         descriptorOwnership,
         claimPath,
