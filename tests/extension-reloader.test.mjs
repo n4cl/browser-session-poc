@@ -5,6 +5,7 @@ import {
   parseDevToolsActivePort,
   readDevToolsActivePort,
   reloadManagedExtension,
+  waitForDevToolsActivePort,
 } from "../core/extension-reloader.mjs";
 
 const extensionId = "clahiechjmcpfihlnjaoadbfpeachnij";
@@ -83,6 +84,70 @@ test("DevToolsActivePort is tied to the current user and maintenance startup", a
       lstatUserDataDirImpl: async () => ({ ...profileInfo, uid: currentUid + 1 }),
     }), /user data directory is unavailable/);
   }
+});
+
+test("DevToolsActivePort polling waits for a stale file to become fresh", async () => {
+  let currentTime = 1_000;
+  let reads = 0;
+  const sleeps = [];
+  const result = await waitForDevToolsActivePort({
+    userDataDir: "/tmp/browser-poc/profiles/poc-a",
+    minimumMtimeMs: 900,
+    timeoutMs: 5_000,
+    pollMs: 100,
+    now: () => currentTime,
+    sleep: async (milliseconds) => {
+      sleeps.push(milliseconds);
+      currentTime += milliseconds;
+    },
+    readActivePort: async () => {
+      reads += 1;
+      if (reads < 3) throw new Error("managed Chrome DevTools endpoint is unavailable");
+      return { port: 9_222, webSocketPath: "/devtools/browser/browser-fresh" };
+    },
+  });
+  assert.deepEqual(result, { port: 9_222, webSocketPath: "/devtools/browser/browser-fresh" });
+  assert.equal(reads, 3);
+  assert.deepEqual(sleeps, [100, 100]);
+});
+
+test("DevToolsActivePort polling fails with a fixed endpoint error at its deadline", async () => {
+  let currentTime = 1_000;
+  let reads = 0;
+  await assert.rejects(
+    () => waitForDevToolsActivePort({
+      userDataDir: "/tmp/browser-poc/profiles/poc-a",
+      timeoutMs: 250,
+      pollMs: 100,
+      now: () => currentTime,
+      sleep: async (milliseconds) => { currentTime += milliseconds; },
+      readActivePort: async () => {
+        reads += 1;
+        throw new Error("managed Chrome DevTools endpoint is unavailable");
+      },
+    }),
+    /managed Chrome DevTools endpoint is unavailable/,
+  );
+  assert.equal(reads, 4);
+});
+
+test("DevToolsActivePort polling does not accept malformed fresh content", async () => {
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const profileInfo = { isDirectory: () => true, mode: 0o40700, uid: currentUid };
+  const fileInfo = { isFile: () => true, mode: 0o100600, nlink: 1, uid: currentUid, mtimeMs: 2_000 };
+  await assert.rejects(
+    () => waitForDevToolsActivePort({
+      userDataDir: "/tmp/browser-poc/profiles/poc-a",
+      minimumMtimeMs: 1_000,
+      readActivePort: (options) => readDevToolsActivePort({
+        ...options,
+        lstatUserDataDirImpl: async () => profileInfo,
+        lstatImpl: async () => fileInfo,
+        readFileImpl: async () => "9\n/devtools/page/not-browser\n",
+      }),
+    }),
+    /invalid DevTools active port file/,
+  );
 });
 
 test("managed Extension reload targets only the dedicated Extension service worker", async () => {

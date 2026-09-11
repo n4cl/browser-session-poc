@@ -4,6 +4,8 @@ import { GATE_1_EXTENSION_ID } from "./extension-id.mjs";
 
 export const DEVTOOLS_ACTIVE_PORT_FILENAME = "DevToolsActivePort";
 export const EXTENSION_RELOAD_EXPRESSION = "setTimeout(() => chrome.runtime.reload(), 0);";
+export const DEVTOOLS_ACTIVE_PORT_WAIT_TIMEOUT_MS = 5_000;
+export const DEVTOOLS_ACTIVE_PORT_POLL_MS = 100;
 const DEVTOOLS_BROWSER_PATH_PREFIX = "/devtools/browser/";
 
 function fail(message) {
@@ -95,6 +97,33 @@ export async function readDevToolsActivePort({
     fail("managed Chrome DevTools endpoint is unavailable");
   }
   return parseDevToolsActivePort(content);
+}
+
+export async function waitForDevToolsActivePort({
+  userDataDir,
+  minimumMtimeMs = null,
+  timeoutMs = DEVTOOLS_ACTIVE_PORT_WAIT_TIMEOUT_MS,
+  pollMs = DEVTOOLS_ACTIVE_PORT_POLL_MS,
+  readActivePort = readDevToolsActivePort,
+  now = () => Date.now(),
+  sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+}) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || !Number.isSafeInteger(pollMs) || pollMs <= 0) {
+    fail("invalid DevTools active port wait");
+  }
+  const startedAt = now();
+  if (!Number.isFinite(startedAt)) fail("invalid DevTools active port wait");
+  const deadline = startedAt + timeoutMs;
+  while (true) {
+    try {
+      return await readActivePort({ userDataDir, minimumMtimeMs });
+    } catch (error) {
+      if (error?.message !== "managed Chrome DevTools endpoint is unavailable") throw error;
+      const remaining = deadline - now();
+      if (remaining <= 0) fail("managed Chrome DevTools endpoint is unavailable");
+      await sleep(Math.min(pollMs, remaining));
+    }
+  }
 }
 
 function extensionTarget(targetInfo, extensionId) {
@@ -195,9 +224,10 @@ export async function reloadManagedExtension({
   extensionId = GATE_1_EXTENSION_ID,
   minimumMtimeMs = null,
   readActivePort = readDevToolsActivePort,
+  waitForActivePort = waitForDevToolsActivePort,
   createCdpClient = connectBrowserCdp,
 }) {
-  const { port, webSocketPath } = await readActivePort({ userDataDir, minimumMtimeMs });
+  const { port, webSocketPath } = await waitForActivePort({ userDataDir, minimumMtimeMs, readActivePort });
   const webSocketUrl = assertLoopbackWebSocketUrl(`ws://127.0.0.1:${port}${webSocketPath}`, port);
   const cdp = await createCdpClient(webSocketUrl);
   try {

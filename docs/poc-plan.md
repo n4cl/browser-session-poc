@@ -128,7 +128,7 @@ Gate 1では固定IDのunpacked Extensionに`nativeMessaging`だけを要求し�
 - nonce再利用、旧generation、別instance IDを拒否する。
 - AのHost crash/reconnect中もBが継続する。
 
-このGateに失敗した場合はbrowser toolを実装せず、方式を再検討する。managed Chromeのunpacked Extension更新時はmanifest versionをbumpして`npm run chrome -- reload-extension <instance-id>`を使う。このコマンドは所有UID・0700・非symlinkの専用user-data-dirを確認した上で対象instanceを一時的なCDP付きChromeとして起動し、0600または0644の`DevToolsActivePort`から専用Extension workerだけを更新してからCDPなしの通常起動へ戻す管理経路であり、通常Chromeの`chrome://extensions`は操作しない。
+このGateに失敗した場合はbrowser toolを実装せず、方式を再検討する。managed Chromeのunpacked Extension更新時はmanifest versionをbumpして`npm run chrome -- reload-extension <instance-id>`を使う。このコマンドは所有UID・0700・非symlinkの専用user-data-dirを確認した上で対象instanceを一時的なCDP付きChromeとして起動し、0600または0644の`DevToolsActivePort`をfresh化まで最大5秒・約100ms間隔でbounded pollingしてから専用Extension workerだけを更新し、CDPなしの通常起動へ戻す管理経路であり、通常Chromeの`chrome://extensions`は操作しない。fresh条件を満たさない場合は固定エラーで拒否する。
 
 ### Gate 3: 最小browser tool
 
