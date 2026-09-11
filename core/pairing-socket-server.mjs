@@ -153,6 +153,7 @@ export class PairingSocketServer {
     this.#state = transition.state;
     const result = new Promise((resolve, reject) => {
       this.#pendingBrowserCommands.set(requestId, {
+        requestId,
         resolve,
         reject,
         timer: null,

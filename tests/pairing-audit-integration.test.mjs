@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import net from "node:net";
-import { mkdtemp } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile } from "node:fs/promises";
 import { once } from "node:events";
 import path from "node:path";
 import test from "node:test";
 import { encodeNativeMessage, NativeMessageDecoder } from "../native-host/codec.mjs";
 import { createPairingDescriptor, createSocketPath, loadOrCreateProfileMetadata, resolvePairingPaths } from "../core/pairing-descriptor.mjs";
-import { AUDIT_ERROR_CODE } from "../core/pairing-audit-log.mjs";
+import { AUDIT_ERROR_CODE, createPairingAuditLogger, pairingAuditFilePath } from "../core/pairing-audit-log.mjs";
 import { PairingSocketServer } from "../core/pairing-socket-server.mjs";
 
 const NOW = new Date("2030-01-01T00:30:00.000Z");
@@ -14,6 +14,8 @@ const NOW = new Date("2030-01-01T00:30:00.000Z");
 async function serverFixture(auditLogger = null) {
   const runtimeRoot = await mkdtemp(path.join("/private/tmp", "bsp-audit-server-"));
   const paths = resolvePairingPaths({ runtimeRoot, instanceId: "poc-a" });
+  await mkdir(paths.instanceDir, { recursive: true, mode: 0o700 });
+  await chmod(paths.instanceDir, 0o700);
   const metadata = await loadOrCreateProfileMetadata(paths, { createUuid: () => "11111111-1111-4111-8111-111111111111" });
   const socketPath = await createSocketPath(paths, { createUuid: () => "22222222-2222-4222-8222-222222222222" });
   const descriptor = createPairingDescriptor({
@@ -27,8 +29,11 @@ async function serverFixture(auditLogger = null) {
     leaseId: "lease-a",
     pairingNonce: "nonce-a",
   });
+  if (auditLogger === "real") {
+    auditLogger = await createPairingAuditLogger({ paths, generation: descriptor.generation });
+  }
   const server = new PairingSocketServer({ paths, descriptor, profileInstanceId: metadata.profile_instance_id, now: NOW, auditLogger });
-  return { runtimeRoot, descriptor, server };
+  return { runtimeRoot, paths, descriptor, server, auditLogger };
 }
 
 function message(descriptor, type, extra = {}) {
@@ -220,4 +225,75 @@ test("closing while issued audit is pending sends nothing and records transport_
   await closing;
   await navigationRejected;
   assert.deepEqual(events.map((event) => event.outcome), ["issued", "transport_closed"]);
+});
+
+test("real audit logger preserves issued and completion for an immediate browser response", async (t) => {
+  const fixture = await serverFixture("real");
+  t.after(async () => {
+    await fixture.server.close();
+    await fixture.auditLogger.close();
+  });
+  await fixture.server.listen();
+  const client = await activeClient(fixture.descriptor);
+  t.after(() => client.socket.destroy());
+
+  const status = fixture.server.requestBrowserStatus({ requestId: "real-audit-fast" });
+  assert.equal((await client.next()).type, "browser_status_request");
+  client.socket.write(encodeNativeMessage(message(fixture.descriptor, "browser_status_response", {
+    request_id: "real-audit-fast",
+    status: { extension_connected: true, chrome_tabs_available: true },
+  })));
+  await status;
+  await fixture.auditLogger.close();
+  const lines = (await readFile(pairingAuditFilePath(fixture.paths, fixture.descriptor.generation), "utf8"))
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(lines.map((event) => event.outcome), ["issued", "success"]);
+});
+
+test("reentrant browser response during socket.write still completes the real audit event", async (t) => {
+  const fixture = await serverFixture("real");
+  t.after(async () => {
+    await fixture.server.close();
+    await fixture.auditLogger.close();
+  });
+  await fixture.server.listen();
+  const client = await activeClient(fixture.descriptor);
+  t.after(() => client.socket.destroy());
+
+  const originalWrite = net.Socket.prototype.write;
+  let injected = false;
+  net.Socket.prototype.write = function reentrantAuditWrite(chunk, ...args) {
+    if (!injected && Buffer.isBuffer(chunk)) {
+      const outbound = new NativeMessageDecoder({ maxBytes: 64 * 1024 }).push(chunk)[0];
+      if (outbound?.type === "browser_status_request") {
+        injected = true;
+        this.emit("data", encodeNativeMessage(message(fixture.descriptor, "browser_status_response", {
+          request_id: outbound.request_id,
+          status: { extension_connected: true, chrome_tabs_available: true },
+        })));
+      }
+    }
+    return Reflect.apply(originalWrite, this, [chunk, ...args]);
+  };
+  try {
+    const status = fixture.server.requestBrowserStatus({ requestId: "real-audit-reentrant" });
+    assert.deepEqual(await status, {
+      request_id: "real-audit-reentrant",
+      command: "browser_status",
+      session_id: fixture.descriptor.session_id,
+      browser_instance_id: fixture.descriptor.browser_instance_id,
+      profile_instance_id: fixture.descriptor.profile_instance_id,
+      generation: fixture.descriptor.generation,
+      lease_id: fixture.descriptor.lease_id,
+      ok: true,
+      status: { extension_connected: true, chrome_tabs_available: true },
+    });
+    assert.equal(injected, true);
+  } finally {
+    net.Socket.prototype.write = originalWrite;
+  }
+  await fixture.auditLogger.close();
+  const lines = (await readFile(pairingAuditFilePath(fixture.paths, fixture.descriptor.generation), "utf8"))
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(lines.map((event) => event.outcome), ["issued", "success"]);
 });
