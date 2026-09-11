@@ -187,15 +187,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
 
 ### Gate 4: isolation acceptance test
 
-自動または半自動で次を再現する。
-
-1. A/Bで異なるcookieとlocalStorage markerを設定する。
-2. 相互のmarkerが見えないことを確認する。
-3. A/Bが同時に異なるページを操作する。
-4. AのMCP、Host、Extension、Chromeを順に停止してBの継続を確認する。
-5. Aを同じprofileで再起動し、状態が残ることを確認する。
-6. Aの旧connectionからのcommandが拒否されることを確認する。
-7. audit log上で全操作をsession/browser/requestへ対応付けられることを確認する。
+Gate 4は未実施であり、具体的な停止順、A/B near-concurrent操作、同一originのcookie/localStorage分離、old connection fence、private audit JSONL、実機/自動testの境界を[Gate 4実行計画](./gate-4-plan.md)に定義する。実装と実機試験はこの計画の合意後に開始する。
 
 ### Gate 5: Codex / Claude Code接続
 
