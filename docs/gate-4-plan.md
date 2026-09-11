@@ -11,7 +11,7 @@ A/Bはそれぞれ専用のuser-data-dir、profile metadata、descriptor、sessi
 - A/Bの新しいleaseでpairingし、両方が`ACTIVE`である。
 - A/Bでfresh snapshotを取得し、操作対象のtab・loader・backend DOM nodeを各instance内で選ぶ。
 - localhostの試験ページは、入力結果をcookieとlocalStorageへ保存し、そのprofileの保存値だけをsnapshotへ表示する。markerの値は試験画面で照合するが、ログ・audit・この記録には保存しない。
-- 試験ページはリポジトリ内の`npm run gate4-fixture -- --port 0`で起動する。fixtureは`127.0.0.1`だけにbindし、`gate4-fixture ready http://127.0.0.1:<port>/`を一度だけ出力する。入力markerはcookie/localStorageへ保存し、ファイルシステムを読まず、SIGINT/SIGTERMでlistenerを閉じる。
+- 試験ページはリポジトリ内の`npm run gate4-fixture -- --port 0`で起動する。fixtureは`127.0.0.1`だけにbindし、`gate4-fixture ready http://127.0.0.1:<port>/`を一度だけ出力する。入力markerはcookie/localStorageへ保存し、ファイルシステムを読まず、SIGINT/SIGTERMでlistenerを閉じる。端末のCtrl-Cはnpmラッパーが終了コード1を返すことがあるため、ゼロ終了まで確認する手動停止には`node scripts/gate4-fixture.mjs --port 0`を使う（同コマンドはsignal後exit 0）。
 - 24時間leaseは長時間の停止・復旧を一回の作業単位で確認する場合だけ明示する。通常の短い試験は既定leaseを使用する。
 
 ## 2. 作業単位と合格条件

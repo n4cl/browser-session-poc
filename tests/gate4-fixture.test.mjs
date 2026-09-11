@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -10,8 +13,54 @@ import {
   parseFixtureArguments,
 } from "../scripts/gate4-fixture.mjs";
 
+const FIXTURE_SCRIPT_PATH = fileURLToPath(new URL("../scripts/gate4-fixture.mjs", import.meta.url));
+
 async function responseText(response) {
   return response.text();
+}
+
+async function runFixtureUntilSignal(signal) {
+  const child = spawn(process.execPath, [FIXTURE_SCRIPT_PATH, "--port", "0"], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  let readyResolve;
+  let readyReject;
+  const ready = new Promise((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk;
+    const match = /^gate4-fixture ready (http:\/\/127\.0\.0\.1:\d+)\/$/mu.exec(stdout);
+    if (match) readyResolve({ origin: match[1] });
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  child.once("error", readyReject);
+  child.once("close", (code, receivedSignal) => {
+    if (!readyResolve) return;
+    if (code !== null && !stdout.includes("gate4-fixture ready")) {
+      readyReject(new Error(`fixture exited before ready: ${code}/${receivedSignal}`));
+    }
+  });
+  const close = once(child, "close");
+  try {
+    const { origin } = await ready;
+    const healthResponse = await fetch(`${origin}/healthz`);
+    assert.equal(healthResponse.status, 200);
+    assert.equal(await responseText(healthResponse), "ok\n");
+    assert.equal(child.kill(signal), true);
+    const [code, receivedSignal] = await close;
+    assert.equal(code, 0);
+    assert.equal(receivedSignal, null);
+    assert.equal(stderr, "");
+    await assert.rejects(fetch(`${origin}/healthz`));
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+  }
 }
 
 test("Gate 4 fixture arguments are strict and default to an ephemeral port", () => {
@@ -110,4 +159,9 @@ test("fixture rejects invalid methods, paths, and marker bounds", async (t) => {
   const authorityFormResponse = await fetch(`${fixture.origin}//other-origin.test/`);
   assert.equal(authorityFormResponse.status, 400);
   assert.equal(await responseText(authorityFormResponse), "bad request\n");
+});
+
+test("direct fixture CLI exits cleanly and closes its listener on SIGINT/SIGTERM", async () => {
+  await runFixtureUntilSignal("SIGINT");
+  await runFixtureUntilSignal("SIGTERM");
 });
