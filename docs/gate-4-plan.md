@@ -1,6 +1,6 @@
 # Gate 4 isolation acceptance test 実行計画
 
-この文書はGate 4の具体的な実行計画であり、この作業単位では実装・実機試験を行わない。Gate 3で合格した`browser_status`、`tabs_list`、`navigate`、`snapshot`、`click`、`type`を前提に、A/Bのprofile・connection・lifecycle分離を確認する。
+この文書はGate 4の具体的な実行計画と合格条件を示す参照文書である。実装・実機試験の最新結果は[Gate 4実機試験結果](./gate-4-results.md)に記録する。Gate 3で合格した`browser_status`、`tabs_list`、`navigate`、`snapshot`、`click`、`type`を前提に、A/Bのprofile・connection・lifecycle分離を確認する。
 
 ## 1. 目的と前提
 

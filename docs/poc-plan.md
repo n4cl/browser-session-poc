@@ -187,7 +187,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
 
 ### Gate 4: isolation acceptance test
 
-Gate 4は未実施であり、具体的な停止順、A/B near-concurrent操作、同一originのcookie/localStorage分離、old connection fence、private audit JSONL、実機/自動testの境界を[Gate 4実行計画](./gate-4-plan.md)に定義する。実装と実機試験はこの計画の合意後に開始する。
+進捗: **合格**（2026-09-12）。同一loopback origin上のcookie/localStorage分離、A/B near-concurrent操作、A限定のNative Host・harness・Chrome・Extension worker停止からの復旧、同一profile再起動後の保存状態、private audit JSONLを自動testと実Chromeで確認した。実機で旧Native Messaging transportを保持して悪意あるlate responseを再利用する試験だけは安全な保持手段がないため未実施であり、計画どおり自動state/socket/Host testを証拠として採用した。詳細は[Gate 4実機試験結果](./gate-4-results.md)、実行条件は[Gate 4実行計画](./gate-4-plan.md)を参照する。
 
 ### Gate 5: Codex / Claude Code接続
 
