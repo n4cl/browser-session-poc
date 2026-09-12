@@ -1,6 +1,6 @@
 # Gate 5 Codex / Claude Code MCP接続 実行計画
 
-この文書はGate 5の実装計画である。G5-0（公式SDKのstdio smoke）は完了したが、G5-1以降のbrowser adapter、Codex/Claude Code実機接続はまだ追加していない。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。G5-0の固定依存・テスト・監査結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。
+この文書はGate 5の実装計画である。G5-0（公式SDKのstdio smoke）、G5-1（process lifecycle）、G5-2（six tools adapter）、G5-3（audit統合のprotocol-level自動検証）は完了したが、Codex/Claude Code実機接続、G5-4以降の検証は未完了である。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。G5-0の固定依存・テスト・監査結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。
 
 調査基準日は2026-09-12（日本時間）である。Context7はこの環境で利用できないため、MCP仕様・公式TypeScript SDK・OpenAI Codex・Anthropic Claude Codeの公式一次資料を参照した。公式資料のURLと確認事項は末尾にまとめる。
 
@@ -167,6 +167,8 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 - click/type/navigateのmutation failure、timeout、transport close、server closeを`outcome_unknown`へ固定し、再送しない。
 
 ### G5-3: audit統合
+
+進捗: **protocol-level統合検証完了（2026-09-12）**。結果は[G5-3結果](./gate-5-g5-3-results.md)を参照する。実Chrome、Codex/Claude実client、G5-4以降は未実施である。
 
 - issued→dispatch→completion→MCP result/errorの順序を、同期response/reentrant writeを含むtestで確認する。
 - audit fileのexact 8 keys、A/B・generation分離、private permission、attribute change fail-closedを既存logger testへ接続する。
