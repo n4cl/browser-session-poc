@@ -19,7 +19,7 @@
 
 adapterは`startPairingHarness`が所有する`harness.server`の既存request APIを一回だけ呼ぶ薄い変換層であり、coreのidentity、request ID、timeout、audit、late response fence、mutation `outcome_unknown`を再実装しない。MCP request IDとは別にcore request IDを生成し、各結果からsession、lease、nonce、host connection、profile path、raw errorを除外する。tabs resultはURL/titleを返さず、typeのtextもresult/errorへ返さない。
 
-入力schemaは6 toolごとにexact fieldsと追加フィールド拒否を設定し、既存のnavigate/click/type validatorを再利用した。成功結果はbounded `structuredContent`と固定`ok` content、失敗結果はcoreの固定error codeだけを含む`isError` resultとする。64 KiB境界をMCP result全体でも確認し、自動retryは行わない。
+入力schemaは6 toolごとにexact fieldsと追加フィールド拒否を設定し、既存のnavigate/click/type validatorを再利用した。2025-03-26 client互換性を優先し、成功結果はcompact resultを決定的JSONとしてTextContentへ一本化する（structuredContentは併記しない）。structuredContentは2025-06-18で追加されたため、古いclientが実データをcontentから復元でき、同時にsnapshotの二重表現で64 KiB超過することも避けられる。失敗結果はcoreの固定error codeだけを含む`isError` resultとする。64 KiB境界をMCP result全体でも確認し、自動retryは行わない。
 
 ## 自動検証
 
@@ -27,7 +27,7 @@ adapterは`startPairingHarness`が所有する`harness.server`の既存request A
 
 - tools/listが6 toolだけを返し、empty/exact input schemaとmutation/read-only annotationを確認
 - 6 toolが対応core methodを各1回だけ呼び、MCP request IDとcore request IDを分離
-- malformed/unknown fields、fixed error、`outcome_unknown`、oversized result、no-retryを確認
+- malformed/unknown fields、fixed error、`outcome_unknown`、legacy contentからのJSON復元、64 KiB境界、no-retryを確認
 - tabsのURL/title、type text、raw Chrome errorがMCP result/errorへ出ないことを確認
 - child entry pointのA/B継続性と、既存全suiteを再確認
 

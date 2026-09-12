@@ -19,9 +19,9 @@ export const MCP_BROWSER_TOOL_NAMES = Object.freeze([
   "click",
   "type",
 ]);
+export const MCP_BROWSER_RESULT_MAX_BYTES = BROWSER_COMMAND_RESPONSE_MAX_BYTES;
 
 const FIXED_TOOL_ERROR_CODES = new Set([...BROWSER_ERROR_CODES, AUDIT_ERROR_CODE]);
-const MCP_BROWSER_RESULT_MAX_BYTES = BROWSER_COMMAND_RESPONSE_MAX_BYTES;
 
 function exactFields(value, fields) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid tool arguments");
@@ -187,7 +187,15 @@ function compactResult(command, result) {
 }
 
 function successResult(result) {
-  const response = { content: [{ type: "text", text: "ok" }], structuredContent: result };
+  let serialized;
+  try {
+    serialized = JSON.stringify(result);
+  } catch {
+    const error = new Error("response_too_large");
+    error.code = "response_too_large";
+    throw error;
+  }
+  const response = { content: [{ type: "text", text: serialized }] };
   assertResultSize(response);
   return response;
 }

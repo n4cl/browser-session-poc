@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { StdioServerTransport, serveStdio } from "@modelcontextprotocol/server/stdio";
 
-import { createMcpBrowserServer } from "../scripts/mcp-browser-adapter.mjs";
+import { createMcpBrowserServer, MCP_BROWSER_RESULT_MAX_BYTES } from "../scripts/mcp-browser-adapter.mjs";
 
 const LEGACY_PROTOCOL_VERSION = "2025-03-26";
 
@@ -144,6 +144,7 @@ test("MCP browser adapter exposes exactly six strict tools and dispatches each c
       const response = await client.next();
       assert.equal(response.id, 10 + index);
       assert.equal(response.result.isError, undefined);
+      assert.equal(typeof JSON.parse(response.result.content[0].text), "object");
     }
     assert.deepEqual(calls.map(([command]) => command), requests.map(([command]) => command));
     assert.deepEqual(calls.map(([, options]) => options.requestId), [
@@ -161,14 +162,14 @@ test("MCP browser adapter strips tab URL/title and type text from results", asyn
     await initializeAndList(client);
     client.send({ jsonrpc: "2.0", id: 20, method: "tools/call", params: { name: "tabs_list", arguments: {} } });
     const tabs = await client.next();
-    assert.deepEqual(tabs.result.structuredContent, { tabs: [{ id: 7, window_id: 1, active: true }] });
+    assert.deepEqual(JSON.parse(tabs.result.content[0].text), { tabs: [{ id: 7, window_id: 1, active: true }] });
     assert.doesNotMatch(JSON.stringify(tabs), /title-secret|url-secret/u);
     client.send({
       jsonrpc: "2.0", id: 21, method: "tools/call",
       params: { name: "type", arguments: { tab_id: 7, loader_id: "loader-safe", backend_dom_node_id: 42, text: "input-secret" } },
     });
     const typed = await client.next();
-    assert.deepEqual(typed.result.structuredContent, {
+    assert.deepEqual(JSON.parse(typed.result.content[0].text), {
       tab_id: 7, loader_id: "loader-safe", backend_dom_node_id: 42, accepted: true,
     });
     assert.doesNotMatch(JSON.stringify(typed), /input-secret/u);
@@ -214,9 +215,8 @@ test("MCP browser adapter rejects malformed input, maps fixed errors, and does n
   }
 });
 
-test("MCP browser adapter converts an oversized compact result to a fixed error", async () => {
-  const client = createClient(fakeBrowserServer([], {
-    requestSnapshot: async () => ({
+test("MCP browser adapter keeps the legacy content result within the exact 64 KiB bound", async () => {
+  const snapshotForName = (name) => ({
       tab_id: 7,
       document: { loader_id: "loader-safe" },
       nodes: [{
@@ -224,17 +224,38 @@ test("MCP browser adapter converts an oversized compact result to a fixed error"
         parent_ref: null,
         backend_dom_node_id: null,
         role: "RootWebArea",
-        name: "x".repeat(66_000),
+        name,
         value: null,
         state: { disabled: false, expanded: false, focused: false, hidden: false },
       }],
       truncated: false,
       partial: false,
-    }),
+    });
+  const resultBytes = (result) => Buffer.byteLength(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(result) }] }));
+  let low = 0;
+  let high = 70_000;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (resultBytes(snapshotForName("x".repeat(middle))) <= MCP_BROWSER_RESULT_MAX_BYTES) low = middle;
+    else high = middle - 1;
+  }
+  const acceptedSnapshot = snapshotForName("x".repeat(low));
+  let currentSnapshot = acceptedSnapshot;
+  const client = createClient(fakeBrowserServer([], {
+    requestSnapshot: async () => currentSnapshot,
   }));
   try {
     await initializeAndList(client);
     client.send({ jsonrpc: "2.0", id: 40, method: "tools/call", params: { name: "snapshot", arguments: { tab_id: 7 } } });
+    const accepted = await client.next();
+    assert.equal(Buffer.byteLength(JSON.stringify(accepted.result)), resultBytes(acceptedSnapshot));
+    assert.deepEqual(JSON.parse(accepted.result.content[0].text), acceptedSnapshot);
+    assert.ok(Buffer.byteLength(JSON.stringify(accepted.result)) <= MCP_BROWSER_RESULT_MAX_BYTES);
+
+    const rejectedSnapshot = snapshotForName("x".repeat(low + 1));
+    assert.ok(resultBytes(rejectedSnapshot) > MCP_BROWSER_RESULT_MAX_BYTES);
+    currentSnapshot = rejectedSnapshot;
+    client.send({ jsonrpc: "2.0", id: 41, method: "tools/call", params: { name: "snapshot", arguments: { tab_id: 7 } } });
     const response = await client.next();
     assert.equal(response.result.isError, true);
     assert.deepEqual(response.result.content, [{ type: "text", text: "response_too_large" }]);
