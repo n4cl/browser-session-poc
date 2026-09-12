@@ -943,7 +943,7 @@ test("pairing Native Host rejects an invalid snapshot schema", async (t) => {
 
   const snapshot = server.requestSnapshot({ requestId: "invalid-native-snapshot", tabId: 7, timeoutMs: 1_000 });
   assert.equal((await outputQueue.next()).type, "snapshot_request");
-  const rejected = assert.rejects(snapshot, (error) => error.code === "timeout");
+  const rejected = assert.rejects(snapshot, (error) => error.code === "transport_closed");
   input.write(encodeNativeMessage({
     type: "snapshot_response",
     ...pairingIdentity(fixture.descriptor, "connection-invalid-snapshot"),

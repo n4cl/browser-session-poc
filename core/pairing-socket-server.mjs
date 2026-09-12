@@ -532,7 +532,7 @@ export class PairingSocketServer {
 
   #cancelPendingBrowserCommands() {
     for (const requestId of [...this.#state.pendingBrowserRequests].map((request) => request.requestId)) {
-      const cancelled = cancelBrowserCommand(this.#state, requestId);
+      const cancelled = cancelBrowserCommand(this.#state, requestId, { reason: "transport_closed" });
       this.#state = cancelled.state;
       this.#applyEffects(cancelled.effects);
     }

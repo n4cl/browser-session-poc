@@ -404,15 +404,19 @@ export function issueBrowserCommand(state, { command, requestId, target = undefi
   }, [{ type: "send", connectionId: state.activeConnectionId, message }]);
 }
 
-export function cancelBrowserCommand(state, requestId) {
+export function cancelBrowserCommand(state, requestId, { reason = "timeout" } = {}) {
   const pending = state.pendingBrowserRequests.find((candidate) => candidate.requestId === requestId);
   if (!pending) return next(state, {});
+  const isMutation = ["navigate", "click", "type"].includes(pending.command);
+  const errorCode = reason === "transport_closed"
+    ? (isMutation ? "outcome_unknown" : "transport_closed")
+    : (isMutation ? "outcome_unknown" : "timeout");
   return next(state, {
     pendingBrowserRequests: state.pendingBrowserRequests.filter((candidate) => candidate.requestId !== requestId),
   }, [{
     type: "browser_rejected",
     requestId,
-    response: { ok: false, errorCode: ["navigate", "click", "type"].includes(pending.command) ? "outcome_unknown" : "timeout" },
+    response: { ok: false, errorCode },
   }]);
 }
 

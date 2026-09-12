@@ -357,6 +357,28 @@ test("navigate canonicalizes an exact safe target, correlates its tab, and marks
   }
 });
 
+test("transport cancellation distinguishes read closure from mutation uncertainty", () => {
+  const status = issueBrowserCommand(activeState(), { command: "browser_status", requestId: "transport-status" });
+  const statusCancelled = cancelBrowserCommand(status.state, "transport-status", { reason: "transport_closed" });
+  assert.deepEqual(statusCancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "transport-status",
+    response: { ok: false, errorCode: "transport_closed" },
+  }]);
+
+  const navigation = issueBrowserCommand(activeState(), {
+    command: "navigate",
+    requestId: "transport-navigation",
+    target: { tabId: 7, url: "https://example.test/" },
+  });
+  const navigationCancelled = cancelBrowserCommand(navigation.state, "transport-navigation", { reason: "transport_closed" });
+  assert.deepEqual(navigationCancelled.effects, [{
+    type: "browser_rejected",
+    requestId: "transport-navigation",
+    response: { ok: false, errorCode: "outcome_unknown" },
+  }]);
+});
+
 test("snapshot is explicit-tab, read-only, and timeout is retry-safe", () => {
   const issued = issueBrowserCommand(activeState(), {
     command: "snapshot",
