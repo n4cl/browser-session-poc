@@ -1,8 +1,8 @@
 # Gate 5 Codex / Claude Code MCP接続 実行計画
 
-この文書はGate 5の実装計画である。G5-0（公式SDKのstdio smoke）、G5-1（process lifecycle）、G5-2（six tools adapter）、G5-3（audit統合のprotocol-level自動検証）、G5-4（lifecycle/crash/restartのsocket/process-level自動検証）は完了したが、Codex/Claude Code実機接続、G5-5以降の検証は未完了である。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。G5-0の固定依存・テスト・監査結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。
+この文書はGate 5の実装計画である。G5-0（公式SDKのstdio smoke）、G5-1（process lifecycle）、G5-2（six tools adapter）、G5-3（audit統合のprotocol-level自動検証）、G5-4（lifecycle/crash/restartのsocket/process-level自動検証）は完了した。G5-5はCodex側partial passまで進んだが、Claude Code実機接続、実Chrome、Gate 5全体の合格判定は未完了である。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。G5-0の固定依存・テスト・監査結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。
 
-調査基準日は2026-09-12（日本時間）である。Context7はこの環境で利用できないため、MCP仕様・公式TypeScript SDK・OpenAI Codex・Anthropic Claude Codeの公式一次資料を参照した。公式資料のURLと確認事項は末尾にまとめる。
+調査基準日は2026-09-12（日本時間）、G5-5実施・本計画更新日は2026-09-13（日本時間）である。Context7はこの環境で利用できないため、MCP仕様・公式TypeScript SDK・OpenAI Codex・Anthropic Claude Codeの公式一次資料を参照した。公式資料のURLと確認事項は末尾にまとめる。
 
 ## 1. 現状と設計制約
 
@@ -185,6 +185,12 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 - A processだけを終了・再起動し、Bのpending request、socket、audit、phaseへ影響しないことを確認する。
 
 ### G5-5: Codex/Claude local stdio compatibility
+
+進捗: **Codex側partial pass（2026-09-13）**。結果は[G5-5結果](./gate-5-g5-5-results.md)を参照する。G5-5全体は未完了であり、Claude Codeは未導入・未実施、実Chromeも未実施である。
+
+- project-scoped `.codex/config.toml`方式は2回失敗した。project layer未ロードと判断し、server spawnを示す観測も得られなかった。
+- Codex CLI 0.154.0では、project/user configを変更しないdirect `-c` one-shot overrideへ切り替えた。stdio serverを認識し、6 tool catalog、`browser_status{}` 1回、固定`transport_closed`、exit 0、`PASS`を確認した。
+- 実行後のruntime、claim、descriptor、socket、audit、一時設定はcleanup済みで、repoはcleanである。production/test変更はない。
 
 - 公式CLIでA/Bを別server名として登録し、`list`、initialize、tools/list、各toolの固定入力を実行する。
 - project `.codex/config.toml`と`.mcp.json`は一時作業領域へ生成し、repoやauditへruntime値を残さない。
