@@ -58,7 +58,7 @@ G5-0で確認したSDKが現在のNodeとlegacy 2025 wire smokeに適合しな�
 
 ### 3.1 起動とinstance固定
 
-計画するserver entry pointは`node scripts/mcp-server.mjs --instance-id <instance-id>`のような厳格な起動形式とする（名称・最終CLIは実装作業で確定する）。`--instance-id`は一度だけ受け、空白、重複引数、未知のoption、余分な引数、解決不能なinstanceを拒否する。instance IDをtool parameterから受けない。
+G5-1のserver entry pointは`node scripts/mcp-server.mjs --instance-id <instance-id>`である。`--instance-id`は一度だけ受け、空白、重複引数、未知のoption、余分な引数、解決不能なinstanceを拒否する。instance IDをtool parameterから受けない。現在はlifecycle確認用の`health`だけを公開し、6 browser toolはG5-2で追加する。
 
 起動成功後は次の順序を守る。
 
@@ -149,6 +149,8 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 - package license、transitive dependency、lockfile、Node engineをレビューし、採用を親レビューで確定する。
 
 ### G5-1: process entry pointと厳格startup
+
+進捗: **完了（2026-09-12、lifecycle-levelのみ）**。結果は[G5-1結果](./gate-5-g5-1-results.md)を参照する。G5-2のsix tools、Codex/Claude実client、実Chromeは未実施である。
 
 - `--instance-id`のstrict parser、safe runtime root、startup failureの固定errorを追加する。
 - 1 process=1 instance=1 harness/serverをテストし、Aを止めてもBが継続することを自動確認する。
