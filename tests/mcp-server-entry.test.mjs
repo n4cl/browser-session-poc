@@ -116,7 +116,7 @@ function initializeRequest(id = 1) {
   };
 }
 
-async function initializeAndHealth(server) {
+async function initializeAndTools(server) {
   server.send(initializeRequest());
   const initialized = await server.nextMessage();
   assert.equal(initialized.result.protocolVersion, LEGACY_PROTOCOL_VERSION);
@@ -124,10 +124,9 @@ async function initializeAndHealth(server) {
   server.send({ jsonrpc: "2.0", method: "notifications/initialized", params: {} });
   server.send({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} });
   const tools = await server.nextMessage();
-  assert.deepEqual(tools.result.tools.map(({ name }) => name), ["health"]);
-  server.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "health", arguments: {} } });
-  const health = await server.nextMessage();
-  assert.deepEqual(health.result, { content: [{ type: "text", text: "ok" }] });
+  assert.deepEqual(tools.result.tools.map(({ name }) => name), [
+    "browser_status", "tabs_list", "navigate", "snapshot", "click", "type",
+  ]);
 }
 
 async function assertCleanedUp(runtimeRoot, instanceId) {
@@ -239,7 +238,7 @@ test("MCP server owns one harness, closes on EOF, and removes descriptor claim a
   const runtimeRoot = await temporaryRuntimeRoot();
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   const server = spawnServer(runtimeRoot, "poc-a");
-  await initializeAndHealth(server);
+  await initializeAndTools(server);
   const firstClose = server.closeInput();
   const secondClose = server.closeInput();
   assert.equal(firstClose, secondClose);
@@ -254,7 +253,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
     const runtimeRoot = await temporaryRuntimeRoot();
     t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
     const server = spawnServer(runtimeRoot, "poc-a");
-    await initializeAndHealth(server);
+    await initializeAndTools(server);
     const close = server.waitForClose();
     assert.equal(server.child.kill(signal), true);
     const result = await close;
@@ -277,20 +276,19 @@ test("MCP server startup failure rolls back the claim and emits no path or raw e
   await assert.rejects(() => readFile(path.join(runtimeRoot, "pairing-claims", "poc-a.claim")), { code: "ENOENT" });
 });
 
-test("separate A/B server processes keep health available after A stops", async (t) => {
+test("separate A/B server processes keep the tool surface available after A stops", async (t) => {
   const runtimeRoot = await temporaryRuntimeRoot();
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
   const [serverA, serverB] = [spawnServer(runtimeRoot, "poc-a"), spawnServer(runtimeRoot, "poc-b")];
   try {
-    await Promise.all([initializeAndHealth(serverA), initializeAndHealth(serverB)]);
+    await Promise.all([initializeAndTools(serverA), initializeAndTools(serverB)]);
     const closeA = serverA.closeInput();
-    const healthAfterAStop = (async () => {
-      serverB.send({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "health", arguments: {} } });
-      return serverB.nextMessage();
-    })();
-    const [resultA, health] = await Promise.all([closeA, healthAfterAStop]);
+    serverB.send({ jsonrpc: "2.0", id: 4, method: "tools/list", params: {} });
+    const [resultA, toolsAfterAStop] = await Promise.all([closeA, serverB.nextMessage()]);
     assert.deepEqual(resultA, { code: 0, signal: null, diagnostics: "" });
-    assert.deepEqual(health.result, { content: [{ type: "text", text: "ok" }] });
+    assert.deepEqual(toolsAfterAStop.result.tools.map(({ name }) => name), [
+      "browser_status", "tabs_list", "navigate", "snapshot", "click", "type",
+    ]);
   } finally {
     if (serverB.child.exitCode === null && serverB.child.signalCode === null) await serverB.closeInput();
     if (serverA.child.exitCode === null && serverA.child.signalCode === null) await serverA.closeInput();

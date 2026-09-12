@@ -1,10 +1,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { validateInstanceId } from "../core/chrome-instance.mjs";
 import { resolvePairingPaths } from "../core/pairing-descriptor.mjs";
 import { startPairingHarness } from "../core/pairing-harness.mjs";
+import { createMcpBrowserServer } from "./mcp-browser-adapter.mjs";
 
 export const MCP_SERVER_ERROR_CODES = Object.freeze({
   INVALID_ARGUMENTS: "mcp_invalid_arguments",
@@ -41,37 +41,7 @@ export function resolveMcpServerRuntimeRoot(environment = process.env) {
   return path.resolve(configured ?? path.resolve(import.meta.dirname, "..", ".runtime"));
 }
 
-const EMPTY_OBJECT_SCHEMA = Object.freeze({
-  "~standard": Object.freeze({
-    version: 1,
-    vendor: "browser-session-poc/mcp-server",
-    validate(value) {
-      if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 0) {
-        return { issues: [{ message: "arguments must be an empty object" }] };
-      }
-      return { value: {} };
-    },
-    jsonSchema: Object.freeze({
-      input: () => ({ type: "object", properties: {}, additionalProperties: false }),
-      output: () => ({ type: "object", properties: {}, additionalProperties: false }),
-    }),
-  }),
-});
-
-export function createMcpLifecycleServer() {
-  const server = new McpServer({ name: "browser-session-poc", version: "0.0.0" });
-  server.registerTool(
-    "health",
-    {
-      title: "Health",
-      description: "Returns a fixed process health result.",
-      inputSchema: EMPTY_OBJECT_SCHEMA,
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
-    },
-    async () => ({ content: [{ type: "text", text: "ok" }] }),
-  );
-  return server;
-}
+export { createMcpBrowserServer } from "./mcp-browser-adapter.mjs";
 
 export async function runMcpServer({
   argumentsList = process.argv.slice(2),
@@ -146,7 +116,7 @@ export async function runMcpServer({
       return await finished;
     }
     const transport = new StdioServerTransport(input, output, { maxBufferSize: MCP_SERVER_MAX_BUFFER_BYTES });
-    handle = serve(() => createMcpLifecycleServer(), {
+    handle = serve(() => createMcpBrowserServer({ browserServer: harness.server }), {
       transport,
       legacy: "serve",
       onerror: () => {

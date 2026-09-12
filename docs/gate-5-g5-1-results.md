@@ -14,7 +14,7 @@
 node scripts/mcp-server.mjs --instance-id <instance-id>
 ```
 
-instance IDは既存`validateInstanceId`、runtime pathは既存`resolvePairingPaths`を通し、`BROWSER_POC_RUNTIME_ROOT`またはrepo内の`.runtime`を使う。process起動後は明示instanceの`startPairingHarness`を一度だけ作成し、別instance、pairing-session CLI、reload command、ping、shared daemonへfallbackしない。G5-1で公開するMCP toolは固定結果を返す`health`だけで、browser commandやChromeへ接続しない。
+instance IDは既存`validateInstanceId`、runtime pathは既存`resolvePairingPaths`を通し、`BROWSER_POC_RUNTIME_ROOT`またはrepo内の`.runtime`を使う。process起動後は明示instanceの`startPairingHarness`を一度だけ作成し、別instance、pairing-session CLI、reload command、ping、shared daemonへfallbackしない。G5-1時点では固定結果を返す`health`だけを公開していたが、現在はG5-2のsix-tools adapterへ置き換えている。
 
 startup、transport、shutdownの診断は`mcp_invalid_arguments`、`mcp_startup_failed`、`mcp_transport_failed`、`mcp_shutdown_failed`の固定行だけである。runtime path、instance secret、raw exception、Chrome/CDP errorはstdout/stderrへ出さない。stdoutはSDKが生成するJSON-RPCだけを使う。
 
@@ -25,11 +25,11 @@ closeは一度だけ実行し、`handle.close()`後にharnessをcloseする。st
 [`tests/mcp-server-entry.test.mjs`](../tests/mcp-server-entry.test.mjs)で次を確認した。
 
 - strictな`--instance-id`、余分な引数、unsafe ID、nulを含むruntime rootの拒否
-- child processのsynthetic legacy 2025 initialize、initialized、tools/list、health call
+- child processのsynthetic legacy 2025 initialize、initialized、tools/list（G5-1時点のhealth公開を含む）
 - stdin EOFによるexit 0、SIGINT/SIGTERMによるexit 0、二重closeの無害性
 - harness setup failure時の固定startup error、claim rollback、stdout空、raw/path非出力
 - EOF/signal後のdescriptor、claim、socket cleanupとaudit file close確認
-- A/Bを別child processで起動し、A終了後もBのhealth callが継続すること
+- A/Bを別child processで起動し、A終了後もBのMCP tool surfaceが継続すること
 
 ```text
 node --test tests/mcp-server-entry.test.mjs  -> 6 pass / 0 fail

@@ -50,7 +50,7 @@ v2は2025-11-25系と2026-07-28系を扱う。2026-07-28系または両方を受
 
 ### 2.3 推奨決定
 
-G5-0では公式SDK v2.0.0の固定版を追加し、Node 26の独立stdio smokeで2025-era initialize、initialized、tools/list、health tools/call、unknown/malformed request、stdout境界、EOF、SIGTERM、64 KiB input boundを確認した。標準の`StandardSchemaWithJSON`形をfixture内で実装できたため、zodは直接依存へ追加していない。Codex/Claudeの実client接続と6 toolは未実施であり、G5-1以降で確認する。`@modelcontextprotocol/sdk` v1を新規追加したり、`@latest`を実行時に解決したりしない。
+G5-0では公式SDK v2.0.0の固定版を追加し、Node 26の独立stdio smokeで2025-era initialize、initialized、tools/list、health tools/call、unknown/malformed request、stdout境界、EOF、SIGTERM、64 KiB input boundを確認した。標準の`StandardSchemaWithJSON`形をfixture内で実装できたため、zodは直接依存へ追加していない。G5-2でhealthを6 tool adapterへ置き換えた。Codex/Claudeの実client接続は未実施であり、G5-5で確認する。`@modelcontextprotocol/sdk` v1を新規追加したり、`@latest`を実行時に解決したりしない。
 
 G5-0で確認したSDKが現在のNodeとlegacy 2025 wire smokeに適合しない、license reviewを通せない、stdout/close/error境界を安全に固定できない場合は、G5-1へ進まず親レビューで自前adapterを再評価する。その場合もMCP仕様の2025系を明示し、公式transportとconformance試験を実装してから進める。Codex/Claudeの実client互換性はまだ判定していない。
 
@@ -58,7 +58,7 @@ G5-0で確認したSDKが現在のNodeとlegacy 2025 wire smokeに適合しな�
 
 ### 3.1 起動とinstance固定
 
-G5-1のserver entry pointは`node scripts/mcp-server.mjs --instance-id <instance-id>`である。`--instance-id`は一度だけ受け、空白、重複引数、未知のoption、余分な引数、解決不能なinstanceを拒否する。instance IDをtool parameterから受けない。現在はlifecycle確認用の`health`だけを公開し、6 browser toolはG5-2で追加する。
+G5-1のserver entry pointは`node scripts/mcp-server.mjs --instance-id <instance-id>`である。`--instance-id`は一度だけ受け、空白、重複引数、未知のoption、余分な引数、解決不能なinstanceを拒否する。instance IDをtool parameterから受けない。G5-2ではlifecycle確認用の`health`を置き換え、6 browser toolだけを公開する。
 
 起動成功後は次の順序を守る。
 
@@ -150,7 +150,7 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 
 ### G5-1: process entry pointと厳格startup
 
-進捗: **完了（2026-09-12、lifecycle-levelのみ）**。結果は[G5-1結果](./gate-5-g5-1-results.md)を参照する。G5-2のsix tools、Codex/Claude実client、実Chromeは未実施である。
+進捗: **完了（2026-09-12、lifecycle-levelのみ）**。結果は[G5-1結果](./gate-5-g5-1-results.md)を参照する。G5-2のadapter-level実装は完了したが、Codex/Claude実client、実Chromeは未実施である。
 
 - `--instance-id`のstrict parser、safe runtime root、startup failureの固定errorを追加する。
 - 1 process=1 instance=1 harness/serverをテストし、Aを止めてもBが継続することを自動確認する。
@@ -158,6 +158,8 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 - 通常のpairing-session CLI、`reload-extension-worker`、ping、shared daemonへの入口をadapterから分離する。
 
 ### G5-2: six tools adapter
+
+進捗: **adapter-level実装・自動検証完了（2026-09-12）**。結果は[G5-2結果](./gate-5-g5-2-results.md)を参照する。Codex/Claude実client、実Chrome、G5-3以降のaudit/lifecycle検証は未実施である。
 
 - `tools/list`の6名、input schema、annotation、固定result/errorをexact比較する。
 - 各toolが対応するcore request一回だけを呼ぶこと、MCP request IDとcore request IDを取り違えないことをtestする。
