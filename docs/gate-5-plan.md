@@ -143,7 +143,7 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 進捗: **完了（2026-09-12、protocol-levelのみ）**。結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。公式clientの実起動・設定変更・実Chrome操作はこの作業単位に含めない。
 
 - 公式SDK v2.0.0の固定版を一時branchで評価し、Node 26でserverを起動する。
-- 2025系のCodex/Claude互換接続と、必要なら`serveStdio`によるmodern/both接続を別testにする。version auto probeは使わず、選択理由を記録する。
+- synthetic legacy 2025 stdio clientによる接続を確認した。modern/bothは未実施で、必要なら`serveStdio`の別testとして扱う。Codex/Claudeの実client互換性はG5-5で確認し、version auto probeは使わず選択理由を記録する。
 - initialize、initialized、tools/list、最小tools/call、unknown tool、malformed params、stdin EOF、SIGTERMを確認する。
 - stdoutがJSON-RPCだけで、stderrに固定診断だけが出ることを確認する。
 - package license、transitive dependency、lockfile、Node engineをレビューし、採用を親レビューで確定する。
