@@ -1,5 +1,8 @@
 # Local OSS checkouts and research notes.
 /research/
 
+# Installed npm dependencies are generated from package-lock.json.
+node_modules/
+
 # PoC runtime state, sockets, logs, and disposable Chrome profiles.
 /.runtime/

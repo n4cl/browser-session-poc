@@ -1,12 +1,12 @@
 # Gate 5 Codex / Claude Code MCP接続 実行計画
 
-この文書はGate 5の実装前計画である。Gate 5のコード、npm依存、Codex/Claude Codeの実機接続はまだ追加していない。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。
+この文書はGate 5の実装計画である。G5-0（公式SDKのstdio smoke）は完了したが、G5-1以降のbrowser adapter、Codex/Claude Code実機接続はまだ追加していない。Gate 4で合格したcore、pairing、A/B分離、browser command、auditの不変条件をMCPのstdio境界へ持ち込むための作業単位と合格条件を定める。G5-0の固定依存・テスト・監査結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。
 
 調査基準日は2026-09-12（日本時間）である。Context7はこの環境で利用できないため、MCP仕様・公式TypeScript SDK・OpenAI Codex・Anthropic Claude Codeの公式一次資料を参照した。公式資料のURLと確認事項は末尾にまとめる。
 
 ## 1. 現状と設計制約
 
-リポジトリはNode.js ESMのprivate PoCで、`package.json`に`engines`指定はなく、テストはNode標準の`node:test`で実行する。現在の実行環境はNode.js 26系で、外部npm依存は追加していない。Gate 5では既存のcore APIをMCP adapterから呼び、browser操作のroutingやidentity検証を別実装しない。
+リポジトリはNode.js ESMのprivate PoCで、`package.json`に`engines`指定はなく、テストはNode標準の`node:test`で実行する。現在の実行環境はNode.js 26系で、G5-0で`@modelcontextprotocol/server@2.0.0`だけを直接依存へ追加した（他の直接依存は追加しない）。Gate 5では既存のcore APIをMCP adapterから呼び、browser操作のroutingやidentity検証を別実装しない。
 
 現在のcoreの呼び出し口は次のとおりである。
 
@@ -50,9 +50,9 @@ v2は2025-11-25系と2026-07-28系を扱う。2026-07-28系または両方を受
 
 ### 2.3 推奨決定
 
-Gate 5-W0で公式SDK v2.0.0の固定版を使ったstdio smoke/conformanceを先に行い、CodexとClaude Codeの両方でinitializeと6 toolを確認する。W0を通過し、license reviewが完了した場合は`@modelcontextprotocol/server` v2.0.0を採用する。`@modelcontextprotocol/sdk` v1を新規追加したり、`@latest`を実行時に解決したりしない。
+G5-0では公式SDK v2.0.0の固定版を追加し、Node 26の独立stdio smokeで2025-era initialize、initialized、tools/list、health tools/call、unknown/malformed request、stdout境界、EOF、SIGTERM、64 KiB input boundを確認した。標準の`StandardSchemaWithJSON`形をfixture内で実装できたため、zodは直接依存へ追加していない。Codex/Claudeの実client接続と6 toolは未実施であり、G5-1以降で確認する。`@modelcontextprotocol/sdk` v1を新規追加したり、`@latest`を実行時に解決したりしない。
 
-W0で公式SDKが現在のNode、Codex、Claude Codeの組み合わせに適合しない、license reviewを通せない、stdout/close/error境界を安全に固定できない場合だけ、親レビューで自前adapterを再評価する。その場合もMCP仕様の2025系を明示し、公式transportとconformance試験を実装してから進める。今回の作業単位ではどちらの依存も追加しない。
+G5-0で確認したSDKが現在のNodeとlegacy 2025 wire smokeに適合しない、license reviewを通せない、stdout/close/error境界を安全に固定できない場合は、G5-1へ進まず親レビューで自前adapterを再評価する。その場合もMCP仕様の2025系を明示し、公式transportとconformance試験を実装してから進める。Codex/Claudeの実client互換性はまだ判定していない。
 
 ## 3. adapter境界とtool契約
 
@@ -139,6 +139,8 @@ Claude Codeでは公式の`claude mcp add`または`.mcp.json`を使う。projec
 Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、既存Gate 4の自動testと`npm test`を先に通す。
 
 ### G5-0: protocol・SDK・license smoke
+
+進捗: **完了（2026-09-12、protocol-levelのみ）**。結果は[G5-0結果](./gate-5-g5-0-results.md)を参照する。公式clientの実起動・設定変更・実Chrome操作はこの作業単位に含めない。
 
 - 公式SDK v2.0.0の固定版を一時branchで評価し、Node 26でserverを起動する。
 - 2025系のCodex/Claude互換接続と、必要なら`serveStdio`によるmodern/both接続を別testにする。version auto probeは使わず、選択理由を記録する。
