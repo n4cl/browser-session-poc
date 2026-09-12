@@ -81,59 +81,88 @@ export async function runMcpServer({
   errorOutput = process.stderr,
   startHarness = startPairingHarness,
   serve = serveStdio,
+  signalSource = process,
 } = {}) {
   let harness;
   let handle;
   let closePromise;
+  let startupReady = false;
+  let shutdownRequested = false;
+  let requestedExitCode = 0;
   let finish;
   const finished = new Promise((resolve) => { finish = resolve; });
   const writeFixed = (code) => {
     errorOutput.write(`${code}\n`);
   };
-  const closeOnce = (requestedExitCode = 0) => {
+  const closeOnce = (exitCode = 0) => {
+    if (exitCode !== 0) {
+      requestedExitCode = exitCode;
+    }
     if (!closePromise) {
       closePromise = (async () => {
-        let exitCode = requestedExitCode;
+        let finalExitCode = requestedExitCode;
         try {
           await handle?.close();
         } catch {
           writeFixed(MCP_SERVER_ERROR_CODES.SHUTDOWN_FAILED);
-          exitCode = 1;
+          finalExitCode = 1;
         }
         try {
           await harness?.close();
         } catch {
           writeFixed(MCP_SERVER_ERROR_CODES.SHUTDOWN_FAILED);
-          exitCode = 1;
+          finalExitCode = 1;
         }
-        finish(exitCode);
-        return exitCode;
+        if (requestedExitCode !== 0) {
+          finalExitCode = 1;
+        }
+        finish(finalExitCode);
+        return finalExitCode;
       })();
     }
     return closePromise;
   };
-  const onInputEnd = () => { void closeOnce(0); };
-  const onSignal = () => { void closeOnce(0); };
+  const requestShutdown = (exitCode = 0) => {
+    shutdownRequested = true;
+    if (exitCode !== 0) {
+      requestedExitCode = exitCode;
+    }
+    if (startupReady) {
+      void closeOnce(requestedExitCode);
+    }
+  };
+  const onInputEnd = () => { requestShutdown(0); };
+  const onSignal = () => { requestShutdown(0); };
   input.once("end", onInputEnd);
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  signalSource.once("SIGINT", onSignal);
+  signalSource.once("SIGTERM", onSignal);
   try {
     const { instanceId } = parseMcpServerArguments(argumentsList);
     const runtimeRoot = resolveMcpServerRuntimeRoot(environment);
     const paths = resolvePairingPaths({ runtimeRoot, instanceId });
     harness = await startHarness({ runtimeRoot: paths.runtimeRoot, instanceId });
+    if (shutdownRequested) {
+      await closeOnce(requestedExitCode);
+      return await finished;
+    }
     const transport = new StdioServerTransport(input, output, { maxBufferSize: MCP_SERVER_MAX_BUFFER_BYTES });
     handle = serve(() => createMcpLifecycleServer(), {
       transport,
       legacy: "serve",
       onerror: () => {
         writeFixed(MCP_SERVER_ERROR_CODES.TRANSPORT_FAILED);
-        void closeOnce(1);
+        requestShutdown(1);
       },
     });
+    startupReady = true;
+    if (shutdownRequested) {
+      void closeOnce(requestedExitCode);
+    }
     return await finished;
-  } catch {
-    writeFixed(MCP_SERVER_ERROR_CODES.STARTUP_FAILED);
+  } catch (error) {
+    writeFixed(error?.code === MCP_SERVER_ERROR_CODES.INVALID_ARGUMENTS
+      ? MCP_SERVER_ERROR_CODES.INVALID_ARGUMENTS
+      : MCP_SERVER_ERROR_CODES.STARTUP_FAILED);
     try {
       await harness?.close();
     } catch {
@@ -143,8 +172,8 @@ export async function runMcpServer({
     return 1;
   } finally {
     input.off("end", onInputEnd);
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
+    signalSource.off("SIGINT", onSignal);
+    signalSource.off("SIGTERM", onSignal);
   }
 }
 

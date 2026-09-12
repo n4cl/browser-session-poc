@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { EventEmitter } from "node:events";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
@@ -9,6 +10,7 @@ import {
   MCP_SERVER_ERROR_CODES,
   parseMcpServerArguments,
   resolveMcpServerRuntimeRoot,
+  runMcpServer,
 } from "../scripts/mcp-server.mjs";
 
 const SERVER_PATH = path.resolve(import.meta.dirname, "../scripts/mcp-server.mjs");
@@ -157,6 +159,82 @@ test("MCP server parser accepts only one explicit safe instance and resolves the
   );
 });
 
+test("MCP CLI reports invalid arguments without startup detail", async (t) => {
+  for (const argumentsList of [
+    ["--instance-id", "poc-a", "extra"],
+    ["--instance-id", "../outside"],
+  ]) {
+    const runtimeRoot = await temporaryRuntimeRoot("bsp-mcp-invalid-");
+    t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
+    const server = spawnServer(runtimeRoot, "poc-a", argumentsList);
+    const result = await server.waitForClose();
+    assert.deepEqual(result, { code: 1, signal: null });
+    assert.equal(server.output(), "");
+    assert.equal(server.diagnostics(), `${MCP_SERVER_ERROR_CODES.INVALID_ARGUMENTS}\n`);
+  }
+
+  const input = new EventEmitter();
+  input.pause = () => {};
+  const signalSource = new EventEmitter();
+  let diagnostics = "";
+  const result = await runMcpServer({
+    argumentsList: ["--instance-id", "poc-a"],
+    environment: { BROWSER_POC_RUNTIME_ROOT: "\u0000" },
+    input,
+    output: { write: () => true },
+    errorOutput: { write: (chunk) => { diagnostics += chunk; } },
+    signalSource,
+    startHarness: async () => { throw new Error("must not start"); },
+  });
+  assert.equal(result, 1);
+  assert.equal(diagnostics, `${MCP_SERVER_ERROR_CODES.INVALID_ARGUMENTS}\n`);
+});
+
+for (const shutdownEvent of ["end", "SIGTERM"]) {
+  test(`MCP server closes a startup shutdown request before serving (${shutdownEvent})`, async () => {
+    const input = new EventEmitter();
+    input.pause = () => {};
+    const signalSource = new EventEmitter();
+    const output = { write: () => true };
+    let diagnostics = "";
+    let startEntered;
+    const startEnteredPromise = new Promise((resolve) => { startEntered = resolve; });
+    let releaseStart;
+    const startRelease = new Promise((resolve) => { releaseStart = resolve; });
+    let closeCount = 0;
+    let serveCount = 0;
+    const running = runMcpServer({
+      argumentsList: ["--instance-id", "poc-a"],
+      environment: { BROWSER_POC_RUNTIME_ROOT: "/private/tmp/g5-1-startup-shutdown" },
+      input,
+      output,
+      errorOutput: { write: (chunk) => { diagnostics += chunk; } },
+      signalSource,
+      startHarness: async () => {
+        startEntered();
+        await startRelease;
+        return { close: async () => { closeCount += 1; } };
+      },
+      serve: () => {
+        serveCount += 1;
+        throw new Error("serve must not be called after startup shutdown");
+      },
+    });
+    await startEnteredPromise;
+    if (shutdownEvent === "end") {
+      input.emit("end");
+      input.emit("end");
+    } else {
+      signalSource.emit(shutdownEvent);
+    }
+    releaseStart();
+    assert.equal(await running, 0);
+    assert.equal(closeCount, 1);
+    assert.equal(serveCount, 0);
+    assert.equal(diagnostics, "");
+  });
+}
+
 test("MCP server owns one harness, closes on EOF, and removes descriptor claim and socket", async (t) => {
   const runtimeRoot = await temporaryRuntimeRoot();
   t.after(() => rm(runtimeRoot, { recursive: true, force: true }));
@@ -220,4 +298,3 @@ test("separate A/B server processes keep health available after A stops", async 
   await assertCleanedUp(runtimeRoot, "poc-a");
   await assertCleanedUp(runtimeRoot, "poc-b");
 });
-
