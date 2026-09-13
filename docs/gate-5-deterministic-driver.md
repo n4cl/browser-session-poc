@@ -44,3 +44,7 @@ stdoutはsanitizedなsummary JSON 1行だけで、stderrは固定diagnostic code
 driverはMCP childのstdinを閉じ、boundedに終了を待ち、必要時だけSIGTERM/SIGKILLを使う。`--start-fixture`で所有したfixture childも同じbounded cleanupを行う。Chrome、既存runtime、user/project configはdriverのcleanup対象外であり、別の管理手順に委ねる。
 
 このdriverのunit/integration testはJSON-RPC framing、catalog exactness、型保持、snapshot由来target、mutation no-retry、sanitized summaryを検証する。実Chromeを使う試験は別の明示的な実行単位で行う。
+
+## 凍結方針
+
+G5-6実機acceptanceではA/B各1回が最初の`browser_status`で固定`transport_closed`となった。driverはPoC/test-only artifactとしてこの契約のまま凍結し、readiness polling、ready notification/wait、その他の自動復旧は追加しない。製品要件として必要なbrowser tool受付前のready signal/wait、bounded timeout、disconnect handling、mutation送信との分離は、別途仕様とテストを基に製品実装へ作り直す。

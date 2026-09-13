@@ -199,7 +199,7 @@ Gate 5は次の順で実装する。各単位は失敗時に次へ進まず、�
 
 ### G5-6: A/B実機acceptanceと結果記録
 
-決定的なPoC/test-only driverを追加した。`scripts/gate5-acceptance-driver.mjs`はモデルのtool引数生成を介さず、1 process=1 MCP server=1 instanceを維持してJSON-RPCと6 toolを固定順序で実行する。read-only snapshotだけbounded retryを許し、navigate/type/clickは各1回でtimeout・`outcome_unknown`時に再送しない。A/Bは同一fixture originを共有する2 driver processとして並列起動できる。実Chromeでのdriver実行は別作業単位であり、本コミットでは未実施である。詳細は[決定的driver仕様](./gate-5-deterministic-driver.md)を参照する。
+進捗: **deterministic driver実機acceptance未成立（2026-09-13）**。結果は[G5-6結果](./gate-5-g5-6-results.md)を参照する。決定的なPoC/test-only driverはモデルのtool引数生成を介さず、1 process=1 MCP server=1 instanceを維持してJSON-RPCと6 toolを固定順序で実行する。A/B各1回の実行は`browser_status`の固定`transport_closed`で停止し、Gate 5全体の合格判定は行わない。driverは凍結し、ready polling/notification/waitの追加実装はこのPoCへ行わない。詳細は[決定的driver仕様](./gate-5-deterministic-driver.md)を参照する。
 
 1. 同一originのGate 4 fixtureを起動し、A/BのMCP server processへ別instanceを渡す。
 2. Codex A/BとClaude A/Bで`browser_status`、`tabs_list`、`navigate`、`snapshot`、`type`、`click`を順に実行する。`click`/`type`対象は各instanceのfresh snapshotから選ぶ。
