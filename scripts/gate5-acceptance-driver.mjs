@@ -35,6 +35,12 @@ const serverPath = path.join(repositoryRoot, "scripts", "mcp-server.mjs");
 const fixturePath = path.join(repositoryRoot, "scripts", "gate4-fixture.mjs");
 const LOOPBACK_HOST = "127.0.0.1";
 const MARKER_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
+const STORAGE_LABELS = Object.freeze([
+  "Stored marker",
+  "Cookie marker",
+  "localStorage marker",
+  "Cookie/localStorage match",
+]);
 const READ_ONLY_SNAPSHOT_RETRY_CODES = new Set([
   "debugger_unavailable",
   "tab_not_found",
@@ -323,7 +329,7 @@ function spawnMcpServer({ instanceId, runtimeRoot }) {
 }
 
 function waitForChildClose(child, timeoutMs = DRIVER_CHILD_CLOSE_TIMEOUT_MS) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
   return new Promise((resolve) => {
     let timer = setTimeout(() => {
       child.removeListener("close", onClose);
@@ -337,16 +343,16 @@ function waitForChildClose(child, timeoutMs = DRIVER_CHILD_CLOSE_TIMEOUT_MS) {
   });
 }
 
-async function closeChildBounded(child) {
+export async function closeChildBounded(child, { closeTimeoutMs = DRIVER_CHILD_CLOSE_TIMEOUT_MS, killTimeoutMs = 1_000 } = {}) {
   if (!child) return true;
   if (!child.stdin.destroyed && !child.stdin.writableEnded) {
     try { child.stdin.end(); } catch { /* continue to bounded signal cleanup */ }
   }
-  if (await waitForChildClose(child)) return true;
+  if (await waitForChildClose(child, closeTimeoutMs)) return true;
   try { child.kill("SIGTERM"); } catch { /* continue to SIGKILL bound */ }
-  if (await waitForChildClose(child)) return true;
+  if (await waitForChildClose(child, closeTimeoutMs)) return true;
   try { child.kill("SIGKILL"); } catch { return false; }
-  return await waitForChildClose(child, 1_000);
+  return await waitForChildClose(child, killTimeoutMs);
 }
 
 function consumeFixtureLine(state, chunk) {
@@ -529,6 +535,7 @@ function hasLabelledValue(snapshot, label, expected) {
     if (!nodeTexts(nodes[index]).includes(label)) continue;
     if (nodeTexts(nodes[index]).includes(expected)) return true;
     for (let next = index + 1; next < Math.min(nodes.length, index + 5); next += 1) {
+      if (nodeTexts(nodes[next]).some((text) => STORAGE_LABELS.includes(text))) break;
       if (nodeTexts(nodes[next]).includes(expected)) return true;
     }
   }

@@ -8,6 +8,7 @@ import {
   StdioJsonRpcClient,
   assessFinalSnapshot,
   buildFixtureUrl,
+  closeChildBounded,
   newStats,
   parseDriverArguments,
   runAcceptance,
@@ -158,6 +159,65 @@ test("final snapshot assessment returns only booleans and rejects the other mark
     otherMarkerAbsent: true,
   });
   assert.equal(assessFinalSnapshot(good, { expectedMarker: "alpha-a", otherMarker: "alpha-a" }).otherMarkerAbsent, false);
+});
+
+test("final snapshot assessment does not cross a neighboring storage label", () => {
+  const bad = snapshot("loader-final", [
+    node(1, 1, "heading", "Gate 4 storage fixture"),
+    node(2, null, "term", "Stored marker"),
+    node(3, null, "term", "Cookie marker"),
+    node(4, null, "definition", null, "alpha-a"),
+    node(5, null, "term", "localStorage marker"),
+    node(6, null, "definition", null, "alpha-a"),
+    node(7, null, "term", "Cookie/localStorage match"),
+    node(8, null, "definition", null, "true"),
+  ]);
+  const assessment = assessFinalSnapshot(bad, { expectedMarker: "alpha-a", otherMarker: "bravo-b" });
+  assert.equal(assessment.ownMarkerMatch, false);
+  assert.equal(assessment.cookieLocalStorageMatch, true);
+});
+
+test("bounded child cleanup keeps completed children intact and escalates in order", async () => {
+  const completed = {
+    exitCode: 0,
+    signalCode: null,
+    stdin: { destroyed: false, writableEnded: false, end() {} },
+    kill() { throw new Error("completed child must not be killed"); },
+  };
+  assert.equal(await closeChildBounded(completed, { closeTimeoutMs: 5, killTimeoutMs: 5 }), true);
+
+  const ended = new EventEmitter();
+  ended.exitCode = null;
+  ended.signalCode = null;
+  ended.stdin = {
+    destroyed: false,
+    writableEnded: false,
+    end() {
+      setImmediate(() => {
+        ended.exitCode = 0;
+        ended.emit("close", 0, null);
+      });
+    },
+  };
+  const endedSignals = [];
+  ended.kill = (signal) => endedSignals.push(signal);
+  assert.equal(await closeChildBounded(ended, { closeTimeoutMs: 20, killTimeoutMs: 20 }), true);
+  assert.deepEqual(endedSignals, []);
+
+  const escalated = new EventEmitter();
+  escalated.exitCode = null;
+  escalated.signalCode = null;
+  escalated.stdin = { destroyed: false, writableEnded: false, end() {} };
+  const signals = [];
+  escalated.kill = (signal) => {
+    signals.push(signal);
+    if (signal === "SIGKILL") {
+      escalated.exitCode = 137;
+      setImmediate(() => escalated.emit("close", 137, signal));
+    }
+  };
+  assert.equal(await closeChildBounded(escalated, { closeTimeoutMs: 5, killTimeoutMs: 20 }), true);
+  assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
 });
 
 test("acceptance sequence uses fresh snapshot targets, retries read-only snapshot only, and mutates once", async () => {
