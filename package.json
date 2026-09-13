@@ -8,6 +8,7 @@
     "chrome": "node scripts/chrome-instance.mjs",
     "gate4-fixture": "node scripts/gate4-fixture.mjs",
     "mcp-server": "node scripts/mcp-server.mjs",
+    "gate5-driver": "node scripts/gate5-acceptance-driver.mjs",
     "mcp-smoke": "node scripts/mcp-smoke-server.mjs",
     "native-host": "node scripts/native-host-manifest.mjs",
     "pairing": "node scripts/pairing-session.mjs"
