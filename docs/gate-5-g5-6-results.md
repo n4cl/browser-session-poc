@@ -12,8 +12,16 @@
 - A/B各runのtool countは`browser_status=1`、`tabs_list=0`、`navigate=0`、`snapshot=0`、`type=0`、`click=0`だった。
 - mutationは0回、audit eventは0件だった。
 - driver child、MCP child、descriptor、claim、socketはA/Bともcleanup成功。Git作業ツリーもcleanだった。
-- 共有fixtureは親管理のためdriverから停止していない。fixture停止はこの作業単位のcleanup対象外である。
+- 共有fixtureは親管理のためdriverからは停止していないが、結果取得後に親operatorが明示停止済みである。
 - URL、marker、title、tab/loader/node ID、PID、session/runtime path、raw errorは出力・記録していない。
+
+## 前段Codex実client status-only checkpoint
+
+deterministic driverの前段で、A/Bを別Codex process・別MCP serverとして実行し、各1回の`browser_status` actual MCP callを確認した。このcheckpointはCodex real client → MCP → 実Chromeのstatus-only partial passであり、tabs、mutation、G5-6、Gate 5全体の合格を意味しない。
+
+- A初回はactual MCP tool call 0で固定`TOOL_UNAVAILABLE`。同方式2回目はactual call開始/完了`1/1`で、実call結果の`extension_connected=true`かつ`chrome_tabs_available=true`を確認し、PASSとした。
+- Bはactual call開始/完了`1/1`で、実call結果の同じ2 booleanがtrueだった。ただしモデル最終判定の表現は`UNAVAILABLE`であり、実call結果とモデル判定は分離して記録する。
+- このcheckpointでは`tabs_list`、navigate、snapshot、type、click、その他mutationの成立を主張しない。
 
 ## 境界要因と未実装要件
 
