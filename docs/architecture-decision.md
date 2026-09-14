@@ -6,7 +6,7 @@
 
 ## 1. Context
 
-PoC は、専用 Chrome/profile、Native Messaging、Extension、pairing、6 browser tool、A/B の storage 分離を macOS の実 Chrome で部分的に成立させた。一方、MCP server の tool 受付開始から Extension/Native Host が `ACTIVE` になる ready 境界は成立せず、決定的 driver の G5-6 は最初の `browser_status` の `transport_closed` で停止した。したがって、MCP の起動や transport open を browser 操作可能性とみなす構成は製品の前提にできない。
+PoC は、専用 Chrome/profile、Native Messaging、Extension、pairing、6 browser tool、A/B の storage 分離を macOS の実 Chrome で部分的に成立させた。一方、MCP server の tool 受付開始と、下流の Extension/Native Host が対象 profile で操作可能であることとの同期境界は成立せず、決定的 driver の G5-6 は最初の `browser_status` の `transport_closed` で停止した。したがって、MCP の起動や transport open を browser 操作可能性とみなす構成は製品の前提にできない。
 
 本 ADR は、`spike/browser-session-isolation` の次の凍結文書から得た契約だけを入力にする。
 

@@ -16,13 +16,13 @@ ready の成立は「transport が open」「Chrome が process table にある�
 | `ALLOCATED` | session と専用 browser/profile の ownership claim を確保済み | 受付不可 | 必要な descriptor/config を検証して `PAIRING`、または失敗して `REVOKED` |
 | `PAIRING` | generation、lease、nonce、descriptor、Host、Extension binding を発行・検証中 | 受付不可 | identity/ownership が揃えば `ACTIVE`、期限/不一致なら `REVOKED` |
 | `ACTIVE` | identity 付き transport が接続済み。旧 connection は fence 済み | status/readiness probe のみ | probe 成功で `READY`、timeout/close で `DEGRADED` |
-| `READY` | 対象 profile の browser command を bounded な契約で受付可能であることを証明済み | 受付不可（admission 開始前） | `SERVING` への遷移、fault/timeout で `DEGRADED`、終了で `CLOSED` |
-| `SERVING` | `READY` の binding で request を処理中 | 新規 request は共通 admission を通す | 全 pending 完了後 `READY`、fault で `DEGRADED` |
+| `READY` | 対象 profile の browser command を bounded な契約で受付可能であることを証明済み。新規 request の admission 境界が開いている | 新規 request を admission 判定する。admission 通過後は `SERVING` サブ状態で処理する | fault/timeout で `DEGRADED`、正常終了で `CLOSED` |
+| `SERVING` | `READY` の lifecycle 内で admission 済み request を処理中の内部サブ状態 | 追加 request も `READY` の admission を通す。処理中 request の状態を追跡する | request 完了後、未完了 request がなければ `READY`。fault で `DEGRADED` |
 | `DEGRADED` | 接続、ready、Chrome、Extension、Host のいずれかが利用不能/不確定 | 新規 mutation は拒否。status と安全な read-only 再確認のみ | 同一 instance の安全な再接続で `ACTIVE`、期限/所有喪失で `REVOKED`、終了で `CLOSED` |
 | `REVOKED` | lease/generation/socket/descriptor が失効。再利用不可 | 受付不可 | bounded cleanup 後 `CLOSED`。再開は新しい明示 pairing |
 | `CLOSED` | session が終了し、所有 resource の close を完了 | 受付不可 | 終端 |
 
-`SERVING` は実装上 `READY` の内部サブ状態として表現してもよい。ただし、未完了 request の扱いを追跡できることが必須である。
+`SERVING` は独立した readiness ではなく `READY` の内部 request-processing サブ状態である。`READY` は新規 request を admission できる状態、`SERVING` は admission 済み request の処理状態として区別する。複数 request の同時実行、同一 session 内の read-only 並行数、mutation と read-only の相互排他、queue/reject の規則は本設計では未決であり、Gate 0 で固定する。それまでは安全側の実装候補として「session あたり mutation は1件まで、admission 中の新規 mutation は拒否し、read-only の並行数も明示上限を設ける」を採用する。
 
 ## 3. identity と state record
 
@@ -51,7 +51,10 @@ ALLOCATED
   -> PAIRING       claim/descriptor/permission を検証
   -> ACTIVE         matching identity の transport を確立
   -> READY          explicit ready signal または bounded readiness probe が成功
-  -> SERVING        tool admission を開く
+READY
+  -- admit(request) -> SERVING  admission 済み request の内部処理サブ状態
+SERVING
+  -- complete       -> READY     未完了 request がなければ admission を継続
 ```
 
 各矢印のガード:
@@ -59,19 +62,19 @@ ALLOCATED
 1. `ALLOCATED → PAIRING`: session、instance、profile の一対一 claim が存在し、broker が所有すること。既存 live owner や共有 profile は拒否する。
 2. `PAIRING → ACTIVE`: nonce、generation、lease、descriptor、Host、Extension が同じ binding を示し、old connection を fence できること。別 instance への補正はしない。
 3. `ACTIVE → READY`: ready signal は対象の `session_id`、`browser_instance_id`、`profile_instance_id`、generation、lease、connection に相関し、対象 profile 上で command probe（または同等の bounded readiness check）が成功すること。MCP initialize、`tools/list`、Chrome PID のみの成功は不十分。
-4. `READY → SERVING`: version、schema、permissions、audit store、request admission が利用可能であること。ready 確認中の mutation はキューに溜めず拒否する。
+4. `READY -- admit(request) → SERVING`: version、schema、permissions、audit store、request admission が利用可能であること。admission を通過した request だけを処理し、同時実行の上限・queue/reject は Gate 0 で凍結する。ready 確認中の mutation はキューに溜めず拒否する。
 
 ### 4.2 通常処理
 
-`SERVING` で request を受けるとき、次の順に行う。
+`READY` で新規 request を受け、admission を通過した request を `SERVING` の内部サブ状態として処理するとき、次の順に行う。受信直後に fault が発生し `READY` でなくなった場合は、admission を原子的に失敗させる。
 
 1. broker 起動時 binding と request envelope の version/identity を照合する。
 2. 引数の型、サイズ、URL scheme、tab/document/node の有効範囲、未知 field、権限を検証する。
 3. issued audit を private store に順序保証付きで記録する。失敗したら `audit_unavailable` 相当で停止し、dispatch しない。
-4. read-only または mutation の admission を判定する。`READY` でない場合は mutation を dispatch しない。
+4. read-only または mutation の admission を判定する。lifecycle が `READY` でない場合、または Gate 0 で定める同時実行上限を超える場合は mutation を dispatch しない。admission 成功時に request を `SERVING` として登録する。
 5. 対象 tab を明示し、snapshot 由来の loader/node 参照を再検証する。
 6. response が同じ request、connection、generation、lease に相関することを確認する。遅延/旧 response は pending に結び付けず破棄し、必要なら connection を fence する。
-7. completion audit を記録する。完了監査が失敗した場合、mutation は成功扱いせず `outcome_unknown` 相当とする。
+7. completion audit を記録する。完了監査が失敗した場合、mutation は成功扱いせず `outcome_unknown` 相当とする。request を `SERVING` から完了へ収束させ、未完了 request がなければ lifecycle の admission は `READY` のまま継続する。
 
 ### 4.3 ready failure / disconnect
 
