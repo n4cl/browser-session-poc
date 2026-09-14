@@ -31,11 +31,11 @@
 | Chrome ExtensionからNative Messaging Hostへ接続し、protocol以外をstdoutへ出さない | `PASS` | [Gate 1](./gate-1-results.md)で実機の最小往復、origin検証、再接続、codec境界を確認。 |
 | 起動順、generation、lease、nonce、instance IDを明示的に扱い、旧binding・別instanceをfail-closedにする | `PASS` | [Gate 2設計](./gate-2-design.md)と[Gate 2実機結果](./gate-2-results.md)でA/B pairing、起動順反転、old generation拒否、A限定Host切断中のB継続を確認。 |
 | `browser_status`、`tabs_list`、`navigate`、`snapshot`、`click`、`type`を明示対象へ相関させる | `PASS` | [status/tabs](./gate-3-status-tabs-results.md)、[navigate](./gate-3-navigate-results.md)、[snapshot](./gate-3-snapshot-results.md)、[click](./gate-3-click-results.md)、[type](./gate-3-type-results.md)で各作業単位とA/B実機経路を確認。 |
-| freshなdocument参照を使い、stale documentとmutationの不確定結果を再送しない | `PASS` | [Gate 3 type結果](./gate-3-type-results.md)および[Gate 5計画](./gate-5-plan.md)で、fresh loader/node、`stale_document`、`outcome_unknown`、mutation no-retryを確認。 |
+| freshなdocument参照を使い、stale documentとmutationの不確定結果を再送しない | `PASS` | [Gate 3 click結果](./gate-3-click-results.md)と[Gate 3 type結果](./gate-3-type-results.md)で、実Chromeのfresh loader/node相関と`stale_document`を確認。[G5-2](./gate-5-g5-2-results.md)と[G5-4](./gate-5-g5-4-results.md)で、protocol/synthetic範囲の`outcome_unknown`、`transport_closed`、mutation no-retryを確認。 |
 | 同一originでもA/Bのcookie、localStorage、tab、入力結果が混ざらず、A限定停止後もBが継続する | `PASS` | [Gate 4実機結果](./gate-4-results.md)でnear-concurrent操作、storage分離、A限定のExtension/Host/harness/Chrome停止とA復旧、B継続を確認。 |
 | old response fence、private audit、MCP lifecycle/crash/restartをprotocolまたはsynthetic範囲で成立させる | `PASS` | [G5-0](./gate-5-g5-0-results.md)〜[G5-4](./gate-5-g5-4-results.md)でstdio、6 tool adapter、audit相関、socket/process lifecycleを確認。G5-4はSIGKILLしたprocess自身のcleanupを主張せず、次回起動時の安全回収境界を検証した。 |
-| 実Codex clientがstdio serverを認識し、6 toolとstatus callを実行する | `PARTIAL` | [G5-5](./gate-5-g5-5-results.md)でdirect `-c` override、6 tool catalog、`browser_status{}` 1回、固定`transport_closed`、exit 0を確認。実Chromeでの全操作列は未確認で、project-scoped config方式は2回失敗した。 |
-| 実Codex clientから実Chrome A/Bへ、6 toolの決定的操作列を通してstorage・marker分離を受入れる | `FAIL` | [G5-6](./gate-5-g5-6-results.md)でA/B各1回を実行したが、最初の`browser_status`が固定`transport_closed`となり、後続toolとmutationは0回。driverはPoC/test-only artifactとして凍結した。 |
+| 実Codex clientがstdio serverを認識し、status callから実Chromeの接続状態を確認する | `PARTIAL` | [G5-5](./gate-5-g5-5-results.md)では未paired時の`browser_status{}` 1回、固定`transport_closed`、exit 0を確認し、project-scoped config方式は2回失敗した。[G5-6結果](./gate-5-g5-6-results.md)の前段status-only checkpointでは、A/Bを別Codex process・別MCP serverで実行し、最終的なactual `browser_status`結果の`extension_connected=true`かつ`chrome_tabs_available=true`を確認した。ただしBのモデル最終表現は`UNAVAILABLE`であり、実call結果とモデル判定は分離する。6 tool全操作列は未成立である。 |
+| 決定的MCP stdio clientから実Chrome A/Bへ、6 toolの決定的操作列を通してstorage・marker分離を受入れる | `FAIL` | [G5-6](./gate-5-g5-6-results.md)で、Codexではないモデル非依存のPoC MCP clientをA/B各1回実行したが、最初の`browser_status`が固定`transport_closed`となり、後続toolとmutationは0回。driverはPoC/test-only artifactとして凍結した。実Codexの全操作列未確認とは別の判定である。 |
 | Claude Codeでも同じlocal stdio・実Chrome A/B受入れを確認する | `NOT TESTED` | Claude Codeは別端末保留であり、導入・実行していない。[Gate 5計画](./gate-5-plan.md)と[G5-5](./gate-5-g5-5-results.md)に記録。 |
 | bot検知の回避、全CDP domain、Windows/Linux、installer・更新・長期運用を保証する | `NOT TESTED` | これらは[PoCの非目標](./poc-plan.md)であり、今回の成功・失敗から結論を出さない。 |
 
@@ -44,7 +44,7 @@
 - 1つのsessionが暗黙の「最後に接続したtab」へ流れるのではなく、明示的なinstance/profile・pairing・identity境界を持つ構造は、macOS上の通常版Chromeで成立した。
 - Gate 3の6 browser toolは、PoCの固定契約と実Chrome A/B試験の範囲で成立した。Gate 4では同じorigin上の保存状態と操作結果が相互に混ざらないことも確認した。
 - G5-0〜4は、実clientや実Chromeを含まない範囲で、stdio、tool schema、固定error、audit gate、旧connection fence、process lifecycleの契約を確認した。
-- Codexについては、direct one-shot overrideによるstdio/status-onlyの接続境界が確認できた。これは6 toolの実Chrome操作やGate 5合格を意味しない。
+- Codexについては、direct one-shot overrideによるstdio/status-onlyの接続境界を確認し、前段checkpointではA/B別Codex process・別MCP serverから実Chromeの2つの接続booleanがtrueとなるactual status結果も得た。ただしBのモデル最終表現は`UNAVAILABLE`であり、6 toolの実Chrome操作やGate 5合格を意味しない。
 
 ## 成立条件
 
