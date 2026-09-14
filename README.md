@@ -3,8 +3,11 @@
 Codex / Claude Codeの各sessionに、専用のGoogle Chrome instanceとpersistent profileを割り当てられるか検証するための使い捨てPoC。
 
 - [PoC実装計画](./docs/poc-plan.md)
+- [PoC最終評価](./docs/poc-final-assessment.md)
+- [本実装引き継ぎ仕様](./docs/product-reimplementation-handoff.md)
 
 現在は技術的実現可能性を確認するspike段階であり、本番利用を想定した実装ではない。
+PoCのdriverと検証コードはtest-only artifactとして凍結し、本実装へコピーしない。最終評価と引き継ぎ仕様は、実現可能性と製品readyを分けて記録する。
 
 ## Gate 0 の非GUI確認
 

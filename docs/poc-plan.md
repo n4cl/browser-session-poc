@@ -191,7 +191,7 @@ Page.getFrameTree → Accessibility.enable → Accessibility.getFullAXTree
 
 ### Gate 5: Codex / Claude Code接続
 
-進捗: **未実装**。Gate 4合格後に、同じcoreを呼ぶstdio MCP adapterを実装し、CodexとClaude Codeのlocal stdio接続を検証する。SDK比較、厳格なinstance固定、6 browser toolの境界、process lifecycle、audit、A/B実機acceptanceは[Gate 5実行計画](./gate-5-plan.md)にまとめる。このGateでは依存追加・adapter実装・Codex/Claudeの実機試験をまだ行っていない。
+進捗: **Gate 5全体は未合格・未完了**。G5-0〜4のprotocol/synthetic検証は完了し、G5-5はCodex実clientのstdio/status-only partial pass、G5-6はreadiness同期なしのため実Chrome deterministic end-to-end未成立、Claude Codeは別端末保留となった。[Gate 5実行計画](./gate-5-plan.md)と[PoC最終評価](./poc-final-assessment.md)を参照する。driverはPoC/test-only artifactとして凍結し、ready polling/notification/waitをこのPoCへ追加せず、本実装は[引き継ぎ仕様](./product-reimplementation-handoff.md)から作り直す。
 
 合格条件:
 
