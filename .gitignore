@@ -4,6 +4,19 @@
 # Installed dependencies are machine-local and must not be committed.
 node_modules/
 
+# Node/TypeScript build, test, and tool caches.
+dist/
+build/
+out/
+coverage/
+.cache/
+.parcel-cache/
+.vite/
+.turbo/
+.nyc_output/
+*.tsbuildinfo
+.eslintcache
+
 # Research clones and working notes are kept outside the product repository.
 research/
 
@@ -17,3 +30,7 @@ research/
 *.log
 tmp/
 temp/
+
+# Local environment files; keep the checked-in example available.
+.env*
+!.env.example
