@@ -1,0 +1,19 @@
+# Local browser-session runtime, profiles, claims, sockets, and audit output.
+.runtime/
+
+# Installed dependencies are machine-local and must not be committed.
+node_modules/
+
+# Research clones and working notes are kept outside the product repository.
+research/
+
+# Common local/editor artifacts.
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Generated logs and temporary files.
+*.log
+tmp/
+temp/
